@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nexus Cloud | AI-Powered Digital Asset Management</title>
+    
+    <!-- PWA Setup -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#2563eb">
+    <link rel="apple-touch-icon" href="/static/images/avatars/ai-avatar-1.png">
+
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
     
@@ -315,19 +321,34 @@
         from { transform: translateY(20px); opacity: 0; }
         to { transform: translateY(0); opacity: 1; }
     }
-</style>
+    </style>
 
-<div id="center-toast" class="fixed bottom-10 left-1/2 -translate-x-1/2 z-[9999] hidden">
-    <div class="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 nexus-toast">
-        <div class="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-500">
-            ✓
-        </div>
-        <div>
-            <p class="text-[10px] font-black uppercase text-slate-800 dark:text-white leading-none">Action Confirmed</p>
-            <p class="text-[9px] font-bold text-slate-400 mt-1">Your preferences have been successfully updated.</p>
+    <div id="center-toast" class="fixed bottom-10 left-1/2 -translate-x-1/2 z-[9999] hidden">
+        <div class="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 nexus-toast">
+            <div class="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-500">
+                ✓
+            </div>
+            <div>
+                <p class="text-[10px] font-black uppercase text-slate-800 dark:text-white leading-none">Action Confirmed</p>
+                <p class="text-[9px] font-bold text-slate-400 mt-1">Your preferences have been successfully updated.</p>
+            </div>
         </div>
     </div>
-</div>
+
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then(registration => {
+                        console.log('Nexus ServiceWorker Registered!', registration.scope);
+                    })
+                    .catch(err => {
+                        console.log('ServiceWorker Failed: ', err);
+                    });
+            });
+        }
+    </script>
 
 </body>
 </html>
