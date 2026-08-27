@@ -2021,14 +2021,35 @@ def update_last_active():
                 session['last_session_check'] = now.isoformat()
         else:
             logout_user()
+            
+@app.after_request
+def add_header(response):
+    if 'text/html' in response.headers.get('Content-Type', ''):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 @app.route('/logout')
-@login_required
 def logout():
+    # 1. Database sessions collection se token delete karo
+    token = request.cookies.get('nexus_session_token')
+    if token and current_user.is_authenticated:
+        db.sessions.delete_one({"session_token": token, "user_id": ObjectId(current_user.id)})
+
+    # 2. Flask-Login aur Session data wipe karo
     logout_user()
-    session.pop('is_admin_session', None)
-    flash("Signed out.", "success")
-    return redirect(url_for('index'))
+    session.clear()
+
+    # 3. Response banakar cookie udaao aur browser caching band karo
+    resp = make_response(redirect(url_for('login')))
+    resp.delete_cookie('nexus_session_token')
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    
+    flash("Signed out successfully.", "success")
+    return resp
 
 @app.route('/update-username', methods=['POST'])
 @login_required
