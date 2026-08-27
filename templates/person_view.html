@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-10">
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-slate-100 dark:border-slate-800 pb-8">
+        <div class="flex items-center gap-4">
+            <div class="w-16 h-16 rounded-full overflow-hidden border-2 border-nexus shadow-md shrink-0 bg-slate-100 dark:bg-slate-900">
+                <img src="{{ person.cover_image }}" class="w-full h-full object-cover">
+            </div>
+            <div>
+                <div class="flex items-center gap-2">
+                    <h1 id="person-display-name" class="text-3xl font-black tracking-tight text-slate-900 dark:text-white uppercase leading-none">
+                        {{ person.name }}
+                    </h1>
+                    <button onclick="promptRenamePerson('{{ person._id }}', '{{ person.name|replace("'", "\\'") }}')" 
+                            class="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-nexus hover:text-white flex items-center justify-center text-xs transition-all shadow-sm cursor-pointer" 
+                            title="Rename Person">
+                        ✏️
+                    </button>
+                </div>
+                <p class="text-slate-400 text-[10px] font-bold uppercase tracking-wider mt-1.5">
+                    Recognized in {{ images|length }} Digital Assets (Private, Public & General)
+                </p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <button onclick="openPersonShareModal()" 
+                    class="bg-nexus text-white px-4 py-2.5 rounded-xl text-[10px] font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer">
+                <span>🔗</span> Share Album
+            </button>
+            <a href="/people" class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-4 py-2.5 rounded-xl text-[10px] font-black hover:bg-slate-50 transition-all flex items-center gap-1.5 shadow-sm">
+                <span>⬅️</span> All People
+            </a>
+        </div>
+    </div>
+
+    {% if images %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pb-8">
+        {% for img in images %}
+        <div class="bg-white dark:bg-[#1E293B] rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm overflow-hidden group hover:shadow-md transition-all duration-300 flex flex-col relative">
+            <div class="aspect-square w-full max-h-[190px] overflow-hidden bg-slate-100 dark:bg-slate-900 relative flex-shrink-0 border-b border-slate-50 dark:border-slate-800/20">
+                <img src="{{ img.thumb_url if img.thumb_url else img.url }}" onerror="this.src='{{ img.url }}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" alt="{{ img.filename }}">
+            </div>
+
+            <div class="p-2 space-y-1 flex-1 flex flex-col justify-between bg-white dark:bg-[#1E293B]">
+                <div class="flex items-center justify-between gap-1 pb-0.5">
+                    <span class="text-[8px] font-black text-slate-400 uppercase tracking-wider">ROOM: {{ img.folder_name or 'General' }}</span>
+                    <a href="/download-image/{{ img._id }}" class="text-[8px] font-black text-nexus hover:underline">📥 Download</a>
+                </div>
+                <div class="flex flex-wrap gap-0.5 pt-px overflow-hidden truncate whitespace-nowrap">
+                    {% if img.tags %}
+                        {% for tag in img.tags[:3] %}
+                            <span class="text-[9px] font-black text-nexus bg-blue-50/40 dark:bg-blue-950/20 border border-blue-100/20 px-1 py-px rounded uppercase">#{{ tag }}</span>
+                        {% endfor %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- 🔗 PERSON SHARE MODAL -->
+<div id="person-share-modal" class="fixed inset-0 z-[9999] hidden items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fadeIn">
+    <div class="bg-white dark:bg-[#1E293B] p-6 rounded-[2rem] w-full max-w-sm shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
+        
+        <div class="flex justify-between items-center pb-2 border-b border-slate-100 dark:border-slate-800">
+            <h3 class="text-xs font-black text-slate-800 dark:text-white uppercase tracking-wider">Share {{ person.name }}'s Album</h3>
+            <button onclick="closePersonShareModal()" class="text-slate-400 hover:text-slate-600 text-xs font-black">✕</button>
+        </div>
+
+        <div class="space-y-3">
+            <div class="space-y-1">
+                <label class="text-[9px] font-black text-slate-400 uppercase">Set Password (Optional)</label>
+                <input type="password" id="person-share-password" placeholder="Leave empty for public link" class="w-full p-3 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-bold text-xs outline-none focus:ring-1 focus:ring-nexus">
+            </div>
+
+            <button onclick="generatePersonShareLink('{{ person._id }}')" id="generate-btn" class="w-full bg-nexus text-white py-3 rounded-xl font-black text-[10px] uppercase tracking-wider hover:scale-[1.02] active:scale-95 transition-all shadow-md shadow-blue-500/20 cursor-pointer">
+                Generate Share Link
+            </button>
+
+            <div id="person-link-result" class="hidden pt-3 border-t border-slate-100 dark:border-slate-700 space-y-2">
+                <p class="text-[9px] font-black text-emerald-500 uppercase">Shareable Link Ready:</p>
+                <input type="text" id="person-generated-url" readonly class="w-full p-2.5 bg-slate-100 dark:bg-slate-900 rounded-lg text-[9px] font-mono text-slate-600 dark:text-slate-400 outline-none">
+                <button onclick="copyPersonLink()" class="w-full bg-slate-800 hover:bg-black text-white py-2.5 rounded-xl text-[10px] font-black uppercase transition-all">
+                    📋 Copy Link
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    async function promptRenamePerson(personId, currentName) {
+        const newName = prompt("Enter a custom name for this person (e.g. Raj, Arun):", currentName);
+        if (newName && newName.trim() !== "" && newName.trim() !== currentName) {
+            try {
+                const res = await fetch(`/rename-person/${personId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ new_name: newName.trim() })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    document.getElementById('person-display-name').innerText = newName.trim();
+                    location.reload();
+                } else {
+                    alert(data.message || "Failed to rename.");
+                }
+            } catch (err) {
+                alert("Network communication error.");
+            }
+        }
+    }
+
+    function openPersonShareModal() {
+        document.getElementById('person-share-modal').classList.remove('hidden');
+        document.getElementById('person-share-modal').classList.add('flex');
+    }
+
+    function closePersonShareModal() {
+        document.getElementById('person-share-modal').classList.add('hidden');
+        document.getElementById('person-share-modal').classList.remove('flex');
+    }
+
+    async function generatePersonShareLink(personId) {
+        const password = document.getElementById('person-share-password').value;
+        const btn = document.getElementById('generate-btn');
+        btn.innerText = "Generating...";
+        btn.disabled = true;
+
+        try {
+            const res = await fetch(`/generate-person-share-link/${personId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: password })
+            });
+            const data = await res.json();
+
+            if (data.status === 'success') {
+                document.getElementById('person-link-result').classList.remove('hidden');
+                document.getElementById('person-generated-url').value = data.share_url;
+            } else {
+                alert(data.message || "Failed to generate link.");
+            }
+        } catch (e) {
+            alert("Network error.");
+        } finally {
+            btn.innerText = "Generate Share Link";
+            btn.disabled = false;
+        }
+    }
+
+    function copyPersonLink() {
+        const input = document.getElementById('person-generated-url');
+        input.select();
+        document.execCommand('copy');
+        alert("Person Share Link copied to clipboard!");
+        closePersonShareModal();
+    }
+</script>
+{% endblock %}

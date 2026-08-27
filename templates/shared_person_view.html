@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto py-10 px-4 space-y-10">
+    
+    <div class="flex flex-col sm:flex-row justify-between items-center gap-4 border-b border-slate-200 dark:border-slate-800 pb-8 text-center sm:text-left">
+        <div class="flex items-center gap-4">
+            <div class="w-16 h-16 rounded-full overflow-hidden border-2 border-nexus shadow-md shrink-0">
+                <img src="{{ person.cover_image }}" class="w-full h-full object-cover">
+            </div>
+            <div>
+                <h1 class="text-3xl font-black text-slate-900 dark:text-white uppercase tracking-tight">{{ person.name }}</h1>
+                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Shared Face Album • {{ images|length }} Assets</p>
+            </div>
+        </div>
+
+        {% if images %}
+        <a href="/share/person/download-all/{{ person.share_token }}" class="bg-nexus text-white px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider shadow-lg shadow-blue-500/20 hover:scale-105 transition-all flex items-center gap-2 cursor-pointer">
+            <span>📥</span> Download All as ZIP
+        </a>
+        {% endif %}
+    </div>
+
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+        {% for img in images %}
+        <div class="bg-white dark:bg-[#1E293B] rounded-xl overflow-hidden border border-slate-100 dark:border-slate-800 shadow-sm group hover:shadow-md transition-all flex flex-col">
+            <div class="aspect-square overflow-hidden bg-slate-100 dark:bg-slate-900 relative">
+                <img src="{{ img.thumb_url if img.thumb_url else img.url }}" onerror="this.src='{{ img.url }}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
+            </div>
+            
+            <div class="p-2 bg-white dark:bg-[#1E293B] flex justify-between items-center">
+                <span class="text-[8px] font-black text-slate-400 uppercase truncate max-w-[100px]">{{ img.filename }}</span>
+                <a href="/download-image/{{ img._id }}" class="text-[9px] font-black text-nexus hover:underline">
+                    📥 Get
+                </a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if not images %}
+    <div class="py-20 text-center text-slate-400 text-xs font-bold uppercase">
+        No images found in this shared album.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

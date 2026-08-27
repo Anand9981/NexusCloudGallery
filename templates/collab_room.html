@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-10">
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 border-b border-slate-100 dark:border-slate-800 pb-8">
+        <div class="flex items-center gap-4">
+            <div class="w-16 h-16 bg-purple-500/10 text-purple-600 rounded-[1.8rem] flex items-center justify-center text-3xl shadow-inner">
+                🤝
+            </div>
+            <div>
+                <div class="flex items-center gap-3">
+                    <h1 class="text-3xl font-black tracking-tight text-slate-900 dark:text-white uppercase leading-none">
+                        {{ folder.folder_name }}
+                    </h1>
+                    <span class="bg-purple-50 dark:bg-purple-900/30 text-purple-600 text-[10px] font-black px-3 py-1 rounded-full">
+                        {{ images|length }} Assets
+                    </span>
+                </div>
+                <p class="text-slate-400 text-[10px] font-bold uppercase tracking-wider mt-1.5">
+                    Hosted by <span class="text-nexus font-black">{{ folder.owner }}</span> • Multi-User Workspace
+                </p>
+            </div>
+        </div>
+
+        <div class="flex gap-2">
+            <a href="/share/download-all/{{ folder.share_token or folder.collab_token }}" class="bg-slate-900 dark:bg-slate-800 text-white px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-2 hover:scale-105 transition-all">
+                📥 Download All ZIP
+            </a>
+        </div>
+    </div>
+
+    <!-- Collaborative Upload Box -->
+    <div class="bg-gradient-to-br from-purple-50/60 via-blue-50/40 to-slate-50 dark:from-[#1E293B] dark:to-[#0F172A] p-6 rounded-[2rem] border border-purple-100 dark:border-slate-800 shadow-sm space-y-4">
+        <div class="flex items-center justify-between">
+            <div class="space-y-0.5">
+                <h3 class="text-xs font-black uppercase text-slate-800 dark:text-white flex items-center gap-1.5">
+                    <span>📤</span> Drop Your Photos into this Room
+                </h3>
+                <p class="text-[9px] font-bold text-slate-400 uppercase">Instantly syncs with the entire group</p>
+            </div>
+        </div>
+
+        <form id="collab-upload-form" class="space-y-3">
+            {% if not current_user.is_authenticated %}
+            <div class="space-y-1">
+                <label class="text-[9px] font-black text-slate-500 uppercase tracking-wider ml-1">Your Name / Nickname</label>
+                <input type="text" name="guest_name" required placeholder="e.g. Arun, Raj..." class="w-full sm:w-80 p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-bold outline-none focus:ring-1 focus:ring-purple-500">
+            </div>
+            {% endif %}
+
+            <div class="flex flex-col sm:flex-row gap-3">
+                <input type="file" id="collab-files-input" name="image" multiple accept="image/*" required class="flex-1 p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-bold file:mr-4 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:bg-purple-600 file:text-white">
+                
+                <button type="submit" id="collab-upload-btn" class="bg-purple-600 text-white px-8 py-3 rounded-xl text-[11px] font-black uppercase tracking-wider shadow-md hover:bg-purple-500 transition-all cursor-pointer">
+                    Sync to Room ➔
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Room Photos Grid -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 pb-8">
+        {% for img in images %}
+        <div class="bg-white dark:bg-[#1E293B] rounded-xl border border-slate-100 dark:border-slate-800 shadow-sm overflow-hidden group hover:shadow-md transition-all duration-300 flex flex-col relative">
+            <div class="aspect-square w-full max-h-[190px] overflow-hidden bg-slate-100 dark:bg-slate-900 relative flex-shrink-0 border-b border-slate-50 dark:border-slate-800/20">
+                <img src="{{ img.thumb_url if img.thumb_url else img.url }}" onerror="this.src='{{ img.url }}'" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" alt="{{ img.filename }}">
+            </div>
+
+            <div class="p-2 space-y-1 flex-1 flex flex-col justify-between bg-white dark:bg-[#1E293B]">
+                <div class="flex items-center justify-between gap-1 pb-0.5">
+                    <span class="text-[8px] font-black text-slate-400 uppercase tracking-wider truncate">By: <span class="text-purple-600 font-bold">{{ img.uploader }}</span></span>
+                    <a href="/download-image/{{ img._id }}" class="text-[8px] font-black text-nexus hover:underline">📥 Get</a>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+    document.getElementById('collab-upload-form').onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById('collab-upload-btn');
+        btn.disabled = true;
+        btn.innerText = "Syncing...";
+
+        try {
+            const res = await fetch('/collab/upload/{{ folder.collab_token }}', {
+                method: 'POST',
+                body: new FormData(e.target)
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                location.reload();
+            } else {
+                alert(data.message || "Upload failed.");
+                btn.disabled = false;
+                btn.innerText = "Sync to Room ➔";
+            }
+        } catch (err) {
+            alert("Network error.");
+            btn.disabled = false;
+            btn.innerText = "Sync to Room ➔";
+        }
+    };
+</script>
+{% endblock %}

@@ -97,6 +97,18 @@ users_collection = db['accounts']
 folders_collection = db['directories']
 moderation_rules_collection = db['moderation_rules']
 
+people_collection = db['people']
+
+# AWS Rekognition Human Face Collection Initialization
+REK_COLLECTION_ID = "nexus_human_faces"
+try:
+    rek_client.create_collection(CollectionId=REK_COLLECTION_ID)
+    print(f"✅ AWS Rekognition Face Collection '{REK_COLLECTION_ID}' Ready.")
+except rek_client.exceptions.ResourceAlreadyExistsException:
+    pass
+except Exception as e:
+    print(f"Face Collection Warning: {e}")
+
 RECOVERY_OTP_CACHE = {} 
 
 # ---------------------------------------------------
@@ -225,14 +237,19 @@ def index():
         search_query = request.args.get('q', '').strip()
         per_page = 15 
         
-        # Base Security Query (Trash items hidden)
+        # 🌟 DYNAMIC PUBLIC FOLDERS LOOKUP: Sabhi public folders ke naam fetch karo
+        public_folder_docs = list(folders_collection.find({"is_public": True}))
+        public_folder_names = [f['folder_name'] for f in public_folder_docs]
+        
+        # Base Security Query (Trash hidden + Public Images + Public Folders + General)
         query = {
             "in_trash": {"$ne": True}, 
             "$or": [
                 {"is_public": True},
+                {"folder_name": {"$in": public_folder_names}},
                 {
                     "folder_name": {"$regex": "^General$", "$options": "i"}, 
-                    "is_public": {"$ne": False}  # Missing ya true chalega, bas explicitly False nahi hona chahiye
+                    "is_public": {"$ne": False}
                 }
             ]
         }
@@ -267,7 +284,6 @@ def index():
             user_folders.sort(key=lambda x: str(x.get('_id')), reverse=True)
             for folder in user_folders:
                 folder['asset_count'] = images_collection.count_documents({
-                    "uploader": current_user.username, 
                     "folder_name": folder['folder_name'],
                     "in_trash": {"$ne": True}
                 })
@@ -304,6 +320,7 @@ def index():
         print("CRITICAL INDEX ERROR:", e)
         return render_template('index.html', images=[], folders=[], trending_tags=[], search_query='')
 
+
 @app.route('/load-more')
 def load_more():
     try:
@@ -313,10 +330,15 @@ def load_more():
         per_page = 15  
         skip_count = (scroll_page - 1) * per_page
         
+        # 🌟 DYNAMIC PUBLIC FOLDERS LOOKUP
+        public_folder_docs = list(folders_collection.find({"is_public": True}))
+        public_folder_names = [f['folder_name'] for f in public_folder_docs]
+        
         query = {
             "in_trash": {"$ne": True}, 
             "$or": [
                 {"is_public": True},
+                {"folder_name": {"$in": public_folder_names}},
                 {
                     "folder_name": {"$regex": "^General$", "$options": "i"}, 
                     "is_public": {"$ne": False}
@@ -355,13 +377,155 @@ def load_more():
         ]
         
         new_images = list(images_collection.aggregate(pipeline))
-        
-        # 100% JSON Safe Response Format
         return jsonify(json.loads(json_util.dumps(new_images)))
         
     except Exception as e:
         print("Infinite Scroll Backend Error:", e)
         return jsonify([])
+
+# @app.route('/')
+# def index():
+#     try:
+#         search_query = request.args.get('q', '').strip()
+#         per_page = 15 
+        
+#         # Base Security Query (Trash items hidden)
+#         query = {
+#             "in_trash": {"$ne": True}, 
+#             "$or": [
+#                 {"is_public": True},
+#                 {
+#                     "folder_name": {"$regex": "^General$", "$options": "i"}, 
+#                     "is_public": {"$ne": False}  # Missing ya true chalega, bas explicitly False nahi hona chahiye
+#                 }
+#             ]
+#         }
+        
+#         # AI Search Filter
+#         if search_query:
+#             safe_query = re.escape(search_query)
+#             query["$and"] = [{
+#                 "$or": [
+#                     {"tags": {"$regex": safe_query, "$options": "i"}},
+#                     {"filename": {"$regex": safe_query, "$options": "i"}}
+#                 ]
+#             }]
+            
+#         # Private Mode (Blocked Tags Filter)
+#         if current_user.is_authenticated:
+#             user_profile = users_collection.find_one({"username": current_user.username})
+#             if user_profile and user_profile.get('blocked_tags'):
+#                 blocked_tags = user_profile['blocked_tags']
+#                 escaped = [re.escape(str(t).strip().lower()) for t in blocked_tags if str(t).strip()]
+#                 if escaped:
+#                     block_condition = {"tags": {"$not": {"$elemMatch": {"$regex": "|".join(escaped), "$options": "i"}}}}
+#                     if "$and" in query:
+#                         query["$and"].append(block_condition)
+#                     else:
+#                         query["$and"] = [block_condition]
+
+#         # Dropdown Folders Logic
+#         user_folders = []
+#         if current_user.is_authenticated:
+#             user_folders = list(folders_collection.find({"owner": current_user.username}))
+#             user_folders.sort(key=lambda x: str(x.get('_id')), reverse=True)
+#             for folder in user_folders:
+#                 folder['asset_count'] = images_collection.count_documents({
+#                     "uploader": current_user.username, 
+#                     "folder_name": folder['folder_name'],
+#                     "in_trash": {"$ne": True}
+#                 })
+
+#         # Trending AI Tags Logic
+#         trending = []
+#         try:
+#             trending = list(images_collection.aggregate([
+#                 {"$match": query}, 
+#                 {"$unwind": "$tags"},
+#                 {"$sort": {"uploaded_at": -1}}, 
+#                 {"$limit": 50},
+#                 {"$group": {"_id": "$tags", "count": {"$sum": 1}}}, 
+#                 {"$sort": {"count": -1}}, 
+#                 {"$limit": 10}
+#             ]))
+#             trending = [t for t in trending if t.get('_id')]
+#         except Exception:
+#             pass
+
+#         # Initial 15 Images Fetch
+#         pipeline = [
+#             {"$match": query},
+#             {"$sort": {"uploaded_at": -1}}, 
+#             {"$limit": per_page},
+#             {"$lookup": {"from": "accounts", "localField": "uploader", "foreignField": "username", "as": "uploader_meta"}},
+#             {"$addFields": {"profile_pic": {"$arrayElemAt": ["$uploader_meta.profile_pic", 0]}}}
+#         ]
+        
+#         all_images = list(images_collection.aggregate(pipeline))
+#         return render_template('index.html', images=all_images, folders=user_folders, trending_tags=trending, search_query=search_query)
+
+#     except Exception as e:
+#         print("CRITICAL INDEX ERROR:", e)
+#         return render_template('index.html', images=[], folders=[], trending_tags=[], search_query='')
+
+# @app.route('/load-more')
+# def load_more():
+#     try:
+#         scroll_page = request.args.get('page', 1, type=int)
+#         search_query = request.args.get('q', '').strip()
+        
+#         per_page = 15  
+#         skip_count = (scroll_page - 1) * per_page
+        
+#         query = {
+#             "in_trash": {"$ne": True}, 
+#             "$or": [
+#                 {"is_public": True},
+#                 {
+#                     "folder_name": {"$regex": "^General$", "$options": "i"}, 
+#                     "is_public": {"$ne": False}
+#                 }
+#             ]
+#         }
+        
+#         if search_query:
+#             safe_query = re.escape(search_query)
+#             query["$and"] = [{
+#                 "$or": [
+#                     {"tags": {"$regex": safe_query, "$options": "i"}},
+#                     {"filename": {"$regex": safe_query, "$options": "i"}}
+#                 ]
+#             }]
+            
+#         if current_user.is_authenticated:
+#             user_profile = users_collection.find_one({"username": current_user.username})
+#             if user_profile and user_profile.get('blocked_tags'):
+#                 blocked_tags = user_profile['blocked_tags']
+#                 escaped = [re.escape(str(t).strip().lower()) for t in blocked_tags if str(t).strip()]
+#                 if escaped:
+#                     block_condition = {"tags": {"$not": {"$elemMatch": {"$regex": "|".join(escaped), "$options": "i"}}}}
+#                     if "$and" in query:
+#                         query["$and"].append(block_condition)
+#                     else:
+#                         query["$and"] = [block_condition]
+
+#         pipeline = [
+#             {"$match": query},
+#             {"$sort": {"uploaded_at": -1}}, 
+#             {"$skip": skip_count},          
+#             {"$limit": per_page},           
+#             {"$lookup": {"from": "accounts", "localField": "uploader", "foreignField": "username", "as": "uploader_meta"}},
+#             {"$addFields": {"profile_pic": {"$arrayElemAt": ["$uploader_meta.profile_pic", 0]}}}
+#         ]
+        
+#         new_images = list(images_collection.aggregate(pipeline))
+        
+#         # 100% JSON Safe Response Format
+#         return jsonify(json.loads(json_util.dumps(new_images)))
+        
+#     except Exception as e:
+#         print("Infinite Scroll Backend Error:", e)
+#         return jsonify([])
 
 @app.route('/search')
 def search():
@@ -582,6 +746,63 @@ def upload():
             original_url = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com/{filename}"
             thumb_url = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com/{thumb_filename}"
             
+            # ---------------------------------------------------
+            # 🧑‍🤝‍🧑 LOGGED-IN ONLY, HUMAN FACE RECOGNITION
+            # ---------------------------------------------------
+            detected_people_ids = []
+            if current_user.is_authenticated:
+                try:
+                    face_index_resp = rek_client.index_faces(
+                        CollectionId=REK_COLLECTION_ID,
+                        Image={'S3Object': {'Bucket': BUCKET_NAME, 'Name': filename}},
+                        MaxFaces=6,
+                        QualityFilter="AUTO",
+                        DetectionAttributes=['DEFAULT']
+                    )
+
+                    for face_record in face_index_resp.get('FaceRecords', []):
+                        face_id = face_record['Face']['FaceId']
+
+                        search_matches = rek_client.search_faces(
+                            CollectionId=REK_COLLECTION_ID,
+                            FaceId=face_id,
+                            FaceMatchThreshold=80,
+                            MaxFaces=5
+                        )
+
+                        matched_person = None
+                        face_matches = search_matches.get('FaceMatches', [])
+                        if face_matches:
+                            matched_face_ids = [m['Face']['FaceId'] for m in face_matches]
+                            # Strict User Filter: Sirf current user ke faces match honge
+                            matched_person = people_collection.find_one({
+                                "user": current_user.username,
+                                "face_ids": {"$in": matched_face_ids}
+                            })
+
+                        if matched_person:
+                            people_collection.update_one(
+                                {"_id": matched_person['_id']},
+                                {"$addToSet": {"face_ids": face_id}}
+                            )
+                            detected_people_ids.append(str(matched_person['_id']))
+                        else:
+                            total_people = people_collection.count_documents({"user": current_user.username}) + 1
+                            person_default_name = f"Person {total_people:02d}"
+
+                            new_person_doc = {
+                                "user": current_user.username,
+                                "name": person_default_name,
+                                "face_ids": [face_id],
+                                "cover_image": thumb_url,
+                                "created_at": datetime.utcnow()
+                            }
+                            p_res = people_collection.insert_one(new_person_doc)
+                            detected_people_ids.append(str(p_res.inserted_id))
+
+                except Exception as face_err:
+                    print(f"Face Indexing Skipped: {face_err}")
+            
             # 5. Save to Database Node
             images_collection.insert_one({
                 "filename": orig_name, 
@@ -589,12 +810,13 @@ def upload():
                 "url": original_url,          
                 "thumb_url": thumb_url,       
                 "tags": final_tags,
+                "people": list(set(detected_people_ids)),
                 "uploader": uploader, 
                 "folder_name": selected_folder,
                 "views": 0, "likes": 0, "shares": 0, "downloads": 0, 
                 "is_favorite": False, "in_trash": False, 
-                "uploaded_at": datetime.utcnow(), 
-                "is_public": is_public_flag
+                "uploaded_at": datetime.utcnow(),
+                "is_public": folder_is_public
             })
             uploaded_files.append(orig_name)
 
@@ -635,9 +857,21 @@ def create_folder():
 @app.route('/folder/<name>')
 @login_required
 def folder_view(name):
+    # Check folder ownership ya contributor access
+    folder = folders_collection.find_one({
+        "folder_name": name,
+        "$or": [{"owner": current_user.username}, {"contributors": current_user.username}]
+    })
+    
     all_user_folders = list(folders_collection.find({"owner": current_user.username}))
-    folder_images = list(images_collection.find({"uploader": current_user.username, "folder_name": name, "in_trash": False}).sort("uploaded_at", -1))
-    return render_template('folder_view.html', folder_name=name, images=folder_images, all_user_folders=all_user_folders)
+    
+    # Is folder ki saari photos (Chahe kisi bhi dost ne upload ki ho)
+    folder_images = list(images_collection.find({
+        "folder_name": name, 
+        "in_trash": False
+    }).sort("uploaded_at", -1))
+    
+    return render_template('folder_view.html', folder_name=name, folder=folder, images=folder_images, all_user_folders=all_user_folders)
 
 @app.route('/move-assets', methods=['POST'])
 @login_required
@@ -658,6 +892,183 @@ def move_assets():
         return jsonify({'status': 'success', 'message': 'Assets moved successfully'})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+# ---------------------------------------------------
+# ✨ AI SMART ALBUMS: EXPANDED AUTO-GROUPING ENGINE
+# ---------------------------------------------------
+
+THEME_KEYWORD_TAXONOMY = {
+    "Animals & Pets": [
+        "animal", "bird", "dog", "cat", "rabbit", "bear", "finch", "wren", "pet", 
+        "wildlife", "mammal", "fauna", "rodent", "rat", "fish", "puppy", "kitten", "canine", "beast"
+    ],
+    "Nature & Landscapes": [
+        "nature", "tree", "plant", "mountain", "landscape", "sky", "water", "flower", 
+        "forest", "sea", "ocean", "outdoors", "conifer", "scenery", "sunset", "grass", 
+        "desert", "sand", "terrain", "shoreline", "land", "earth", "aerial view", "soil"
+    ],
+    "Vehicles & Transport": [
+        "car", "vehicle", "automobile", "motorcycle", "scooter", "bike", "airplane", 
+        "train", "truck", "wheel", "transportation", "coupe", "sedan", "spaceship", 
+        "spacecraft", "rocket", "vessel", "machine", "aviation"
+    ],
+    "Food & Dining": [
+        "food", "meal", "dish", "drink", "beverage", "dessert", "fruit", "vegetable", 
+        "snack", "restaurant", "coffee", "lunch", "dinner", "breakfast", "cuisine"
+    ],
+    "People & Portraits": [
+        "person", "human", "people", "portrait", "face", "crowd", "smile", "woman", 
+        "man", "child", "girl", "boy", "selfie", "astronaut", "costume", "suit", "fashion"
+    ],
+    "Architecture & Urban": [
+        "building", "architecture", "city", "urban", "house", "bridge", "tower", 
+        "interior", "room", "skyscraper", "monument", "wall", "structure"
+    ],
+    "Documents & Notes": [
+        "text", "document", "receipt", "invoice", "paper", "page", "screenshot", 
+        "book", "label", "flyer", "poster", "notes", "diagram"
+    ]
+}
+
+# ---------------------------------------------------
+# ✨ AI SMART ALBUMS: EXPANDED AUTO-GROUPING ENGINE (MULTI-USER FIXED)
+# ---------------------------------------------------
+
+@app.route('/smart-organize-preview/<folder_name>', methods=['GET'])
+@login_required
+def smart_organize_preview(folder_name):
+    try:
+        # 1. Folder verify karo (Owner ho ya Contributor)
+        folder = folders_collection.find_one({
+            "folder_name": folder_name,
+            "$or": [{"owner": current_user.username}, {"contributors": current_user.username}]
+        })
+
+        # 2. FIX: Is folder ke saare assets scan karo (Chahe owner ne dale hon ya contributor/guest ne)
+        current_images = list(images_collection.find({
+            "folder_name": folder_name,
+            "in_trash": {"$ne": True}
+        }))
+        
+        if not current_images:
+            return jsonify({"status": "error", "message": "No assets found in this folder."}), 400
+
+        user_existing_folders = list(folders_collection.find({"owner": current_user.username}))
+        existing_folder_names = [f['folder_name'] for f in user_existing_folders]
+
+        categorized_moves = {}
+        uncategorized_ids = []
+
+        for img in current_images:
+            img_tags = [t.lower().strip() for t in img.get('tags', [])]
+            matched_target_folder = None
+            is_existing = False
+
+            # Priority 1: Check existing folders by direct tag similarity
+            for exist_name in existing_folder_names:
+                clean_exist = exist_name.lower().strip()
+                if clean_exist == folder_name.lower().strip():
+                    continue
+                if any(clean_exist in tag or tag in clean_exist for tag in img_tags):
+                    matched_target_folder = exist_name
+                    is_existing = True
+                    break
+
+            # Priority 2: Keyword taxonomy evaluation
+            if not matched_target_folder and img_tags:
+                for theme_title, keywords in THEME_KEYWORD_TAXONOMY.items():
+                    if any(kw in img_tags for kw in keywords):
+                        for exist_name in existing_folder_names:
+                            clean_exist = exist_name.lower().strip()
+                            if clean_exist == folder_name.lower().strip():
+                                continue
+                            if any(kw in clean_exist for kw in keywords):
+                                matched_target_folder = exist_name
+                                is_existing = True
+                                break
+                        
+                        if not matched_target_folder:
+                            matched_target_folder = theme_title
+                            is_existing = False
+                        break
+
+            # Priority 3: Fallback bucket
+            if not matched_target_folder and categorized_moves:
+                matched_target_folder = list(categorized_moves.keys())[0]
+                is_existing = categorized_moves[matched_target_folder]["exists"]
+
+            if matched_target_folder and matched_target_folder.lower().strip() != folder_name.lower().strip():
+                if matched_target_folder not in categorized_moves:
+                    categorized_moves[matched_target_folder] = {
+                        "target_folder": matched_target_folder,
+                        "exists": is_existing,
+                        "asset_ids": [],
+                        "count": 0
+                    }
+                categorized_moves[matched_target_folder]["asset_ids"].append(str(img['_id']))
+                categorized_moves[matched_target_folder]["count"] += 1
+            else:
+                uncategorized_ids.append(str(img['_id']))
+
+        return jsonify({
+            "status": "success",
+            "current_folder": folder_name,
+            "total_scanned": len(current_images),
+            "suggestions": list(categorized_moves.values()),
+            "uncategorized_count": len(uncategorized_ids)
+        })
+
+    except Exception as e:
+        print(f"Smart preview error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/execute-smart-organize', methods=['POST'])
+@login_required
+def execute_smart_organize():
+    try:
+        data = request.get_json() or {}
+        moves = data.get('moves', [])
+        
+        if not moves:
+            return jsonify({"status": "error", "message": "No categories selected to move."}), 400
+
+        total_moved = 0
+        for item in moves:
+            target = item.get('target_folder', '').strip()
+            asset_ids = item.get('asset_ids', [])
+            
+            if not target or not asset_ids:
+                continue
+
+            folder_exists = folders_collection.find_one({
+                "owner": current_user.username,
+                "folder_name": {"$regex": f"^{re.escape(target)}$", "$options": "i"}
+            })
+            if not folder_exists:
+                folders_collection.insert_one({
+                    "folder_name": target,
+                    "owner": current_user.username,
+                    "is_public": False,
+                    "created_at": datetime.utcnow()
+                })
+
+            bson_ids = [ObjectId(aid) for aid in asset_ids]
+            
+            # FIX: Uploader filter hata diya gaya hai taaki shared photos bhi move ho sakein
+            res = images_collection.update_many(
+                {"_id": {"$in": bson_ids}},
+                {"$set": {"folder_name": target}}
+            )
+            total_moved += res.modified_count
+
+        return jsonify({
+            "status": "success", 
+            "message": f"Successfully moved {total_moved} assets!"
+        })
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/rename-folder/<folder_id>', methods=['POST'])
 @login_required
@@ -697,8 +1108,8 @@ def rename_folder(folder_id):
 @app.route('/update-folder-privacy/<folder_id>', methods=['POST'])
 @login_required
 def update_folder_privacy(folder_id):
-    data = request.get_json()
-    is_public = data.get('is_public', False)
+    data = request.get_json() or {}
+    is_public = bool(data.get('is_public', False))
     
     folders_collection.update_one(
         {'_id': ObjectId(folder_id), 'owner': current_user.username},
@@ -707,8 +1118,9 @@ def update_folder_privacy(folder_id):
     
     folder = folders_collection.find_one({'_id': ObjectId(folder_id)})
     if folder:
+        # FIX: 'uploader' filter hata diya taaki sabhi contributors ki photos public/private synchronize hon
         images_collection.update_many(
-            {'folder_name': folder['folder_name'], 'uploader': current_user.username},
+            {'folder_name': folder['folder_name']},
             {'$set': {'is_public': is_public}}
         )
     
@@ -735,8 +1147,10 @@ def toggle_folder_privacy(folder_id):
     if folder:
         new_status = not folder.get('is_public', False)
         folders_collection.update_one({"_id": ObjectId(folder_id)}, {"$set": {"is_public": new_status}})
+        
+        # FIX: Saari shared photos ek sath update hongi
         images_collection.update_many(
-            {"folder_name": folder['folder_name'], "uploader": current_user.username},
+            {"folder_name": folder['folder_name']},
             {"$set": {"is_public": new_status}}
         )
         return jsonify({"status": "success", "new_status": "Public" if new_status else "Private"})
@@ -786,17 +1200,35 @@ def download_folder_zip(folder_name):
 @app.route('/my-vault')
 @login_required
 def my_vault():
+    # 1. User ke personal folders
     user_folders = list(folders_collection.find({'owner': current_user.username}))
     for folder in user_folders:
-        count = images_collection.count_documents({
-            'uploader': current_user.username, 
+        folder['asset_count'] = images_collection.count_documents({
             'folder_name': folder['folder_name'],
             'in_trash': {'$ne': True}
         })
-        folder['asset_count'] = count
+        
+        # 🤝 DYNAMIC COLLAB CHECK: Kya folder mein kisi aur (contributor/guest) ki active photo hai?
+        external_uploads = images_collection.count_documents({
+            'folder_name': folder['folder_name'],
+            'uploader': {'$ne': current_user.username},
+            'in_trash': {'$ne': True}
+        })
+        folder['has_collab_uploads'] = (external_uploads > 0)
+        
+    # 2. 🤝 Dusre users ke rooms jo is user ne join kiye hain
+    joined_collab_folders = list(folders_collection.find({
+        'contributors': current_user.username,
+        'owner': {'$ne': current_user.username}
+    }))
+    for folder in joined_collab_folders:
+        folder['asset_count'] = images_collection.count_documents({
+            'folder_name': folder['folder_name'],
+            'in_trash': {'$ne': True}
+        })
         
     user_images = list(images_collection.find({"uploader": current_user.username, "in_trash": False}).sort("uploaded_at", -1))
-    return render_template('vault.html', images=user_images, folders=user_folders)
+    return render_template('vault.html', images=user_images, folders=user_folders, collab_folders=joined_collab_folders)
 
 # ---------------------------------------------------
 # ENGAGEMENT & FAVORITES SYSTEM
@@ -1893,6 +2325,180 @@ The Nexus Cloud Security Team
     except Exception as e:
         print(f"Notification Email Skipped: {e}")
         
+# ---------------------------------------------------
+# 👥 PEOPLE HUB & FACE MANAGEMENT ROUTES
+# ---------------------------------------------------
+
+@app.route('/people')
+@login_required
+def people_hub():
+    people_list = list(people_collection.find({"user": current_user.username}).sort("created_at", -1))
+    
+    # Har person ki total photos count calculate karo
+    for person in people_list:
+        person_id_str = str(person['_id'])
+        count = images_collection.count_documents({
+            "uploader": current_user.username,
+            "people": person_id_str,
+            "in_trash": {"$ne": True}
+        })
+        person['photo_count'] = count
+
+    return render_template('people.html', people=people_list)
+
+
+@app.route('/person/<person_id>')
+@login_required
+def person_gallery(person_id):
+    person = people_collection.find_one({"_id": ObjectId(person_id), "user": current_user.username})
+    if not person:
+        return render_template('404.html', text_override="Person record not found."), 404
+
+    # Is person ki saari photos fetch karo
+    person_photos = list(images_collection.find({
+        "uploader": current_user.username,
+        "people": person_id,
+        "in_trash": {"$ne": True}
+    }).sort("uploaded_at", -1))
+
+    return render_template('person_view.html', person=person, images=person_photos)
+
+
+@app.route('/rename-person/<person_id>', methods=['POST'])
+@login_required
+def rename_person(person_id):
+    try:
+        data = request.get_json() or {}
+        new_name = data.get('new_name', '').strip()
+        
+        if not new_name:
+            return jsonify({"status": "error", "message": "Name cannot be empty."}), 400
+
+        people_collection.update_one(
+            {"_id": ObjectId(person_id), "user": current_user.username},
+            {"$set": {"name": new_name}}
+        )
+        return jsonify({"status": "success", "message": f"Updated name to '{new_name}'."})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    
+# ---------------------------------------------------
+# 🔗 PERSON LINK GENERATION, SHARING & ZIP DOWNLOAD
+# ---------------------------------------------------
+
+@app.route('/generate-person-share-link/<person_id>', methods=['POST'])
+@login_required
+def generate_person_share_link(person_id):
+    try:
+        data = request.get_json() or {}
+        password = data.get('password')
+        
+        person = people_collection.find_one({"_id": ObjectId(person_id), "user": current_user.username})
+        if not person:
+            return jsonify({"status": "error", "message": "Person profile not found."}), 404
+
+        hashed_pw = generate_password_hash(password) if password else None
+        expiry_time = 172800 if password else None # Password hai to 48 hrs, warna permanent
+        
+        token = s.dumps(str(person_id), salt='person-share-salt')
+        
+        people_collection.update_one(
+            {"_id": ObjectId(person_id)},
+            {"$set": {
+                "share_token": token,
+                "share_password": hashed_pw,
+                "expiry_in_seconds": expiry_time
+            }}
+        )
+        
+        share_url = url_for('access_shared_person', token=token, _external=True)
+        return jsonify({"status": "success", "share_url": share_url})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/share/person/access/<token>', methods=['GET', 'POST'])
+def access_shared_person(token):
+    person = people_collection.find_one({"share_token": token})
+    if not person:
+        return "Shared person album not found or link is invalid.", 404
+        
+    expiry = person.get('expiry_in_seconds')
+    try:
+        person_id = s.loads(token, salt='person-share-salt', max_age=expiry)
+    except:
+        return "This shared person link has expired or is invalid.", 403
+
+    if str(person['_id']) != str(person_id):
+        return "Invalid token parameter signature.", 403
+
+    # Password Protection Check
+    if person.get('share_password'):
+        is_owner = current_user.is_authenticated and person['user'] == current_user.username
+        if not is_owner:
+            if request.method == 'POST':
+                user_pw = request.form.get('password')
+                if check_password_hash(person['share_password'], user_pw):
+                    session[f'access_person_{person_id}'] = True
+                else:
+                    return render_template('password_prompt.html', token=token, error="Wrong Password!")
+            
+            if not session.get(f'access_person_{person_id}'):
+                return render_template('password_prompt.html', token=token)
+
+    # Fetch all photos containing this person across all folders
+    images = list(images_collection.find({
+        "uploader": person['user'],
+        "people": str(person['_id']),
+        "in_trash": {"$ne": True}
+    }).sort("uploaded_at", -1))
+    
+    return render_template('shared_person_view.html', images=images, person=person)
+
+
+@app.route('/share/person/download-all/<token>')
+def download_all_person_shared(token):
+    person = people_collection.find_one({"share_token": token})
+    if not person:
+        return "Person album not found.", 404
+        
+    expiry = person.get('expiry_in_seconds')
+    try:
+        person_id = s.loads(token, salt='person-share-salt', max_age=expiry)
+    except:
+        return "Link has expired.", 403
+
+    if person.get('share_password') and not session.get(f'access_person_{person_id}'):
+        return "Unauthorized access.", 401
+        
+    images = list(images_collection.find({
+        "uploader": person['user'],
+        "people": str(person['_id']),
+        "in_trash": {"$ne": True}
+    }))
+    if not images:
+        return "No assets found to download.", 404
+
+    # In-Memory ZIP generation
+    memory_file = BytesIO()
+    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for img in images:
+            try:
+                s3_obj = s3_client.get_object(Bucket=BUCKET_NAME, Key=img['s3_key'])
+                file_bytes = s3_obj['Body'].read()
+                zf.writestr(img['filename'], file_bytes)
+            except Exception as e:
+                print(f"Error zipping {img['filename']}: {e}")
+    
+    memory_file.seek(0)
+    clean_name = person['name'].replace(" ", "_")
+    return send_file(
+        memory_file,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f"{clean_name}_Nexus_Photos.zip"
+    )
+        
 @app.route('/admin/dashboard')
 @admin_required
 def admin_dashboard():
@@ -2045,11 +2651,166 @@ def admin_delete_moderation_rule(rule_id):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
     
+# ---------------------------------------------------
+# 🤝 COLLABORATIVE WORKSPACE & MULTI-USER ROOMS
+# ---------------------------------------------------
+
+@app.route('/generate-collab-link/<folder_id>', methods=['POST'])
+@login_required
+def generate_collab_link(folder_id):
+    try:
+        data = request.get_json(silent=True) or {}
+        password = data.get('password')
+        
+        folder = folders_collection.find_one({"_id": ObjectId(folder_id), "owner": current_user.username})
+        if not folder:
+            return jsonify({"status": "error", "message": "Folder not found."}), 404
+
+        hashed_pw = generate_password_hash(password) if password else None
+        
+        # Dedicated Token Serializer
+        serializer = URLSafeTimedSerializer(app.secret_key)
+        token = serializer.dumps(str(folder_id), salt='collab-room-salt')
+        
+        folders_collection.update_one(
+            {"_id": ObjectId(folder_id)},
+            {"$set": {
+                "is_collab": True,
+                "collab_token": token,
+                "collab_password": hashed_pw
+            }}
+        )
+        
+        collab_url = url_for('access_collab_room', token=token, _external=True)
+        return jsonify({"status": "success", "collab_url": collab_url})
+    except Exception as e:
+        print(f"Collab Generation Error: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/collab/room/<token>', methods=['GET', 'POST'])
+def access_collab_room(token):
+    folder = folders_collection.find_one({"collab_token": token})
+    if not folder:
+        return "Collaborative workspace not found or invalid link.", 404
+
+    folder_id = str(folder['_id'])
+    try:
+        s.loads(token, salt='collab-room-salt')
+    except:
+        return "Workspace link has expired or is invalid.", 403
+
+    # Password Check
+    if folder.get('collab_password'):
+        is_owner = current_user.is_authenticated and folder['owner'] == current_user.username
+        if not is_owner:
+            if request.method == 'POST':
+                user_pw = request.form.get('password')
+                if check_password_hash(folder['collab_password'], user_pw):
+                    session[f'collab_access_{folder_id}'] = True
+                else:
+                    return render_template('password_prompt.html', token=token, error="Incorrect Workspace Password!")
+            
+            if not session.get(f'collab_access_{folder_id}'):
+                return render_template('password_prompt.html', token=token)
+
+    # 🚀 AUTO-JOIN LOGIC: Agar user logged in hai, to use Contributors list mein jodo
+    if current_user.is_authenticated and current_user.username != folder['owner']:
+        folders_collection.update_one(
+            {"_id": folder['_id']},
+            {"$addToSet": {"contributors": current_user.username}}
+        )
+
+    # Fetch all photos uploaded to this room
+    images = list(images_collection.find({"folder_name": folder['folder_name'], "in_trash": False}).sort("uploaded_at", -1))
+    return render_template('collab_room.html', folder=folder, images=images)
+
+
+@app.route('/collab/upload/<token>', methods=['POST'])
+def collab_upload(token):
+    folder = folders_collection.find_one({"collab_token": token})
+    if not folder:
+        return jsonify({"status": "error", "message": "Room not found."}), 404
+
+    # Security check for password protected room
+    folder_id = str(folder['_id'])
+    if folder.get('collab_password'):
+        is_owner = current_user.is_authenticated and folder['owner'] == current_user.username
+        if not is_owner and not session.get(f'collab_access_{folder_id}'):
+            return jsonify({"status": "error", "message": "Unauthorized room access."}), 403
+
+    if 'image' not in request.files:
+        return jsonify({"status": "error", "message": "No files selected."}), 400
+
+    files = request.files.getlist('image')
+    guest_name = request.form.get('guest_name', '').strip()
+    
+    # Uploader Name decide karo
+    if current_user.is_authenticated:
+        uploader_identity = current_user.username
+    elif guest_name:
+        uploader_identity = f"{guest_name} (Guest)"
+    else:
+        uploader_identity = "Guest Explorer"
+
+    uploaded_count = 0
+    for file in files:
+        if file.filename == '':
+            continue
+        try:
+            orig_name = secure_filename(file.filename)
+            filename = f"collab_{int(datetime.utcnow().timestamp())}_{orig_name}"
+            thumb_filename = f"thumb_{filename}"
+            file_bytes = file.read()
+
+            s3_client.put_object(Bucket=BUCKET_NAME, Key=filename, Body=file_bytes, ContentType=file.content_type)
+
+            # Thumbnail generation
+            try:
+                img = Image.open(BytesIO(file_bytes))
+                if img.mode in ("RGBA", "P"): img = img.convert("RGB")
+                img.thumbnail((600, 600))
+                thumb_io = BytesIO()
+                img.save(thumb_io, format='JPEG', quality=60)
+                thumb_io.seek(0)
+                s3_client.put_object(Bucket=BUCKET_NAME, Key=thumb_filename, Body=thumb_io.getvalue(), ContentType='image/jpeg')
+            except:
+                thumb_filename = filename
+
+            # AI Tags
+            ai_tags = []
+            try:
+                rek_resp = rek_client.detect_labels(Image={'S3Object': {'Bucket': BUCKET_NAME, 'Name': filename}}, MaxLabels=10)
+                ai_tags = [label['Name'].lower() for label in rek_resp['Labels']]
+            except:
+                pass
+
+            images_collection.insert_one({
+                "filename": orig_name,
+                "s3_key": filename,
+                "url": f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com/{filename}",
+                "thumb_url": f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com/{thumb_filename}",
+                "tags": ai_tags,
+                "uploader": uploader_identity,
+                "folder_name": folder['folder_name'],
+                "views": 0, "likes": 0, "shares": 0, "downloads": 0,
+                "is_favorite": False, "in_trash": False,
+                "uploaded_at": datetime.utcnow(),
+                "is_public": folder.get('is_public', False)
+            })
+            uploaded_count += 1
+        except Exception as e:
+            print(f"Collab upload error: {e}")
+
+    return jsonify({"status": "success", "message": f"Successfully added {uploaded_count} photos to {folder['folder_name']}!"})
+
+# 🚀 APP.RUN KO HAMESHA FILE KE EK DUM LAST MEIN HONA CHAHIYE
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
-
+    
+    
+    
 
 
 
