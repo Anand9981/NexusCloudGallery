@@ -30,6 +30,30 @@
         </div>
     </div>
 
+    <!-- 🔗 GUEST / LOGGED-IN WORKSPACE STATUS BANNER -->
+    {% if not current_user.is_authenticated %}
+    <div class="bg-gradient-to-r from-purple-900/30 via-indigo-900/20 to-blue-900/30 border border-purple-500/30 p-4 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg">
+        <div class="flex items-center gap-3 text-center sm:text-left">
+            <span class="text-2xl">💡</span>
+            <div>
+                <p class="text-xs font-black text-slate-800 dark:text-white uppercase">Guest Mode Active</p>
+                <p class="text-[10px] font-bold text-slate-500 dark:text-slate-300">Sign in to permanently add this collaborative room into your <strong>My Vault</strong> dashboard.</p>
+            </div>
+        </div>
+        <a href="/login?next=/collab/room/{{ folder.collab_token }}" class="bg-purple-600 hover:bg-purple-500 text-white px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all shadow-md shrink-0">
+            Sign In & Save Room ➔
+        </a>
+    </div>
+    {% else %}
+    <div class="bg-emerald-500/10 border border-emerald-500/30 p-3.5 rounded-2xl flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+            <span class="text-emerald-500 font-black text-sm">✓</span>
+            <p class="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">Workspace connected to your account! You can access it anytime from <strong>My Vault</strong>.</p>
+        </div>
+        <a href="/my-vault" class="text-[9px] font-black text-emerald-600 dark:text-emerald-400 hover:underline uppercase shrink-0">Open Vault ➔</a>
+    </div>
+    {% endif %}
+
     <!-- Collaborative Upload Box -->
     <div class="bg-gradient-to-br from-purple-50/60 via-blue-50/40 to-slate-50 dark:from-[#1E293B] dark:to-[#0F172A] p-6 rounded-[2rem] border border-purple-100 dark:border-slate-800 shadow-sm space-y-4">
         <div class="flex items-center justify-between">

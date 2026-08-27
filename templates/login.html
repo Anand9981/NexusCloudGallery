@@ -157,6 +157,12 @@
         // Form fields ka baseline data pack banao
         const formData = new FormData(this);
 
+        // 🔗 NEXT PARAMETER PASS-THROUGH (For Collab & Shared Links)
+        const nextUrlParam = new URLSearchParams(window.location.search).get('next');
+        if (nextUrlParam) {
+            formData.append('next', nextUrlParam);
+        }
+
         // 🔥 NAYA LOGIC ADDED HERE: Admin Toggle verification state inject karo
         const adminToggle = document.getElementById('admin-clearance-toggle');
         const isAdminLogin = adminToggle ? adminToggle.checked : false;
@@ -178,59 +184,59 @@
             }
 
             // 🚨 SECURITY SHIELD HIT & ERRORS HANDLING OVERRIDE
-        if (!response.ok) {
-            if (response.status === 429) {
-                const errorData = await response.json();
-                passwordErrorMessage.innerText = "⚠️ " + errorData.message;
-                passwordErrorNode.classList.remove('hidden');
-                
-                // Button ko red kardo
-                submitBtn.classList.add('bg-rose-600');
-                submitBtn.classList.remove('bg-blue-600', 'hover:bg-blue-500');
-                
-                let timeLeft = 60; // 60 seconds lock
-                const timer = setInterval(() => {
-                    submitBtn.innerText = `🔒 SYSTEM LOCKED (${timeLeft}s)`;
-                    timeLeft--;
+            if (!response.ok) {
+                if (response.status === 429) {
+                    const errorData = await response.json();
+                    passwordErrorMessage.innerText = "⚠️ " + errorData.message;
+                    passwordErrorNode.classList.remove('hidden');
                     
-                    if (timeLeft < 0) {
-                        clearInterval(timer);
-                        // TIMEOUT KE BAAD WAPAS UNLOCK KARO
-                        isLoginLocked = false; 
-                        submitBtn.disabled = false;
-                        submitBtn.style.pointerEvents = "auto";
-                        submitBtn.innerHTML = originalBtnText;
-                        submitBtn.classList.remove('opacity-80', 'cursor-not-allowed', 'bg-rose-600');
-                        submitBtn.classList.add('bg-blue-600', 'hover:bg-blue-500');
-                        passwordErrorNode.classList.add('hidden');
-                    }
-                }, 1000);
-        
-                return; // YAHAN SE RETURN HUA TOH GATE LOCK HI RAHEGA
-                
-            } 
-            // 🔥 THE FIX: Agar admin access reject ho (403), toh actual warning message screen pr dikhao
-            else if (response.status === 403) {
-                const errorData = await response.json();
-                passwordErrorMessage.innerText = "🚨 " + errorData.message;
-                passwordErrorNode.classList.remove('hidden');
-            } 
-            else {
-                passwordErrorMessage.innerText = "⚠️ Server connection failed.";
-                passwordErrorNode.classList.remove('hidden');
+                    // Button ko red kardo
+                    submitBtn.classList.add('bg-rose-600');
+                    submitBtn.classList.remove('bg-blue-600', 'hover:bg-blue-500');
+                    
+                    let timeLeft = 60; // 60 seconds lock
+                    const timer = setInterval(() => {
+                        submitBtn.innerText = `🔒 SYSTEM LOCKED (${timeLeft}s)`;
+                        timeLeft--;
+                        
+                        if (timeLeft < 0) {
+                            clearInterval(timer);
+                            // TIMEOUT KE BAAD WAPAS UNLOCK KARO
+                            isLoginLocked = false; 
+                            submitBtn.disabled = false;
+                            submitBtn.style.pointerEvents = "auto";
+                            submitBtn.innerHTML = originalBtnText;
+                            submitBtn.classList.remove('opacity-80', 'cursor-not-allowed', 'bg-rose-600');
+                            submitBtn.classList.add('bg-blue-600', 'hover:bg-blue-500');
+                            passwordErrorNode.classList.add('hidden');
+                        }
+                    }, 1000);
+            
+                    return; // YAHAN SE RETURN HUA TOH GATE LOCK HI RAHEGA
+                    
+                } 
+                // 🔥 THE FIX: Agar admin access reject ho (403), toh actual warning message screen pr dikhao
+                else if (response.status === 403) {
+                    const errorData = await response.json();
+                    passwordErrorMessage.innerText = "🚨 " + errorData.message;
+                    passwordErrorNode.classList.remove('hidden');
+                } 
+                else {
+                    passwordErrorMessage.innerText = "⚠️ Server connection failed.";
+                    passwordErrorNode.classList.remove('hidden');
+                }
+            } else {
+                const result = await response.json();
+                if (result.status === 'success') {
+                    window.location.href = result.redirect_url;
+                    return;
+                } else if (result.status === 'password_error') {
+                    passwordErrorMessage.innerText = result.message;
+                    passwordErrorNode.classList.remove('hidden');
+                    const passInput = document.getElementById('password');
+                    passInput.focus();
+                }
             }
-        } else {
-            const result = await response.json();
-            if (result.status === 'success') {
-                window.location.href = result.redirect_url;
-                return;
-            } else if (result.status === 'password_error') {
-                passwordErrorMessage.innerText = result.message;
-                passwordErrorNode.classList.remove('hidden');
-                const passInput = document.getElementById('password');
-                passInput.focus();
-            }
-        }
 
             // 4. NORMAL ERROR (Jaise galat password) PAR UNLOCK KAR DO
             isLoginLocked = false;

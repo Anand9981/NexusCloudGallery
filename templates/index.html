@@ -338,10 +338,24 @@
             b.classList.add('border-slate-200', 'dark:border-slate-700', 'bg-white', 'dark:bg-slate-800', 'text-slate-700', 'dark:text-slate-300');
         });
         
-        // 2. Jo folder select hua hai, usko securely data-folder attribute se dhoondho
-        const active = document.querySelector(`.folder-btn[data-folder="${CSS.escape(name)}"]`);
+        // 2. Button search karo ya dynamic button create karo
+        let active = document.querySelector(`.folder-btn[data-folder="${CSS.escape(name)}"]`);
+        
+        if (!active && name !== 'General') {
+            const grid = document.querySelector('#upload-section .grid.grid-cols-2');
+            if (grid) {
+                const newBtn = document.createElement('button');
+                newBtn.type = 'button';
+                newBtn.setAttribute('data-folder', name);
+                newBtn.onclick = function() { selectFolder(name); };
+                newBtn.className = 'folder-btn w-full text-center px-2 py-2.5 rounded-xl font-bold text-[10px] border-2 transition-all cursor-pointer truncate flex items-center justify-center gap-1.5 shadow-sm border-nexus bg-nexus text-white shadow-blue-500/20';
+                newBtn.innerHTML = `📁 ${name}`;
+                grid.appendChild(newBtn);
+                active = newBtn;
+            }
+        }
+
         if(active) {
-            // Active design (blue) apply karo
             active.classList.remove('border-slate-200', 'dark:border-slate-700', 'bg-white', 'dark:bg-slate-800', 'text-slate-700', 'dark:text-slate-300');
             active.classList.add('border-nexus', 'bg-nexus', 'text-white', 'shadow-blue-500/20');
         }
@@ -350,6 +364,26 @@
         document.getElementById('selected-folder-input').value = name;
         document.getElementById('btnLabel').innerText = "UPLOAD TO " + name.toUpperCase();
     }
+
+    // function selectFolder(name) {
+    //     // 1. Sabhi folder buttons ko default (inactive) design me reset karo
+    //     document.querySelectorAll('.folder-btn').forEach(b => {
+    //         b.classList.remove('border-nexus', 'bg-nexus', 'text-white', 'shadow-blue-500/20');
+    //         b.classList.add('border-slate-200', 'dark:border-slate-700', 'bg-white', 'dark:bg-slate-800', 'text-slate-700', 'dark:text-slate-300');
+    //     });
+        
+    //     // 2. Jo folder select hua hai, usko securely data-folder attribute se dhoondho
+    //     const active = document.querySelector(`.folder-btn[data-folder="${CSS.escape(name)}"]`);
+    //     if(active) {
+    //         // Active design (blue) apply karo
+    //         active.classList.remove('border-slate-200', 'dark:border-slate-700', 'bg-white', 'dark:bg-slate-800', 'text-slate-700', 'dark:text-slate-300');
+    //         active.classList.add('border-nexus', 'bg-nexus', 'text-white', 'shadow-blue-500/20');
+    //     }
+        
+    //     // 3. Hidden input aur Upload button ka text update karo
+    //     document.getElementById('selected-folder-input').value = name;
+    //     document.getElementById('btnLabel').innerText = "UPLOAD TO " + name.toUpperCase();
+    // }
   
     // function selectFolder(name) {
     //     // 1. फोल्डर के नाम में मौजूद स्पेस को डैश (-) से रिप्लेस करना 
@@ -637,7 +671,12 @@
         const folder = urlParams.get('select_folder');
         if (folder) {
             selectFolder(folder);
-            setTimeout(() => { document.getElementById('upload-section').scrollIntoView({ behavior: 'smooth' }); }, 500);
+            setTimeout(() => { 
+                const uploadSection = document.getElementById('upload-section');
+                if (uploadSection) {
+                    uploadSection.scrollIntoView({ behavior: 'smooth' }); 
+                }
+            }, 300);
         }
     });
 

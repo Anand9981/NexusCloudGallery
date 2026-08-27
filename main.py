@@ -277,14 +277,19 @@ def index():
                     else:
                         query["$and"] = [block_condition]
 
-        # Dropdown Folders Logic
+        # Dropdown Folders Logic (Personal Folders + Joined Collab Folders)
         user_folders = []
         if current_user.is_authenticated:
-            user_folders = list(folders_collection.find({"owner": current_user.username}))
+            user_folders = list(folders_collection.find({
+                "$or": [
+                    {"owner": current_user.username},
+                    {"contributors": current_user.username}
+                ]
+            }))
             user_folders.sort(key=lambda x: str(x.get('_id')), reverse=True)
             for folder in user_folders:
                 folder['asset_count'] = images_collection.count_documents({
-                    "folder_name": folder['folder_name'],
+                    "folder_name": {"$regex": f"^{re.escape(folder['folder_name'])}$", "$options": "i"},
                     "in_trash": {"$ne": True}
                 })
 
@@ -665,14 +670,13 @@ def upload():
     blocked_files = []
 
     try:
-        # --- FOLDER PRIVACY CHECK ---
+        # --- FOLDER PRIVACY CHECK (Multi-User Collab & Case-Insensitive) ---
         is_public_flag = False
         if selected_folder.lower() == 'general':
             is_public_flag = True  
-        elif current_user.is_authenticated:
+        else:
             folder_doc = folders_collection.find_one({
-                "folder_name": selected_folder, 
-                "owner": current_user.username
+                "folder_name": {"$regex": f"^{re.escape(selected_folder)}$", "$options": "i"}
             })
             is_public_flag = folder_doc.get('is_public', False) if folder_doc else False
 
@@ -815,8 +819,8 @@ def upload():
                 "folder_name": selected_folder,
                 "views": 0, "likes": 0, "shares": 0, "downloads": 0, 
                 "is_favorite": False, "in_trash": False, 
-                "uploaded_at": datetime.utcnow(),
-                "is_public": folder_is_public
+                "uploaded_at": datetime.utcnow(), 
+                "is_public": is_public_flag
             })
             uploaded_files.append(orig_name)
 
@@ -859,15 +863,15 @@ def create_folder():
 def folder_view(name):
     # Check folder ownership ya contributor access
     folder = folders_collection.find_one({
-        "folder_name": name,
+        "folder_name": {"$regex": f"^{re.escape(name)}$", "$options": "i"},
         "$or": [{"owner": current_user.username}, {"contributors": current_user.username}]
     })
     
     all_user_folders = list(folders_collection.find({"owner": current_user.username}))
     
-    # Is folder ki saari photos (Chahe kisi bhi dost ne upload ki ho)
+    # Is folder ki saari photos fetch karo (Kisi bhi user/guest ki ho)
     folder_images = list(images_collection.find({
-        "folder_name": name, 
+        "folder_name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}, 
         "in_trash": False
     }).sort("uploaded_at", -1))
     
@@ -1204,14 +1208,14 @@ def my_vault():
     user_folders = list(folders_collection.find({'owner': current_user.username}))
     for folder in user_folders:
         folder['asset_count'] = images_collection.count_documents({
-            'folder_name': folder['folder_name'],
+            'folder_name': {"$regex": f"^{re.escape(folder['folder_name'])}$", "$options": "i"},
             'in_trash': {'$ne': True}
         })
         
-        # 🤝 DYNAMIC COLLAB CHECK: Kya folder mein kisi aur (contributor/guest) ki active photo hai?
+        # 🤝 STRICT COLLAB CHECK: Sirf tab True hoga jab Owner ke alawa kisi aur ki active photo upload hogi
         external_uploads = images_collection.count_documents({
-            'folder_name': folder['folder_name'],
-            'uploader': {'$ne': current_user.username},
+            'folder_name': {"$regex": f"^{re.escape(folder['folder_name'])}$", "$options": "i"},
+            'uploader': {"$ne": folder['owner']},
             'in_trash': {'$ne': True}
         })
         folder['has_collab_uploads'] = (external_uploads > 0)
@@ -1223,7 +1227,7 @@ def my_vault():
     }))
     for folder in joined_collab_folders:
         folder['asset_count'] = images_collection.count_documents({
-            'folder_name': folder['folder_name'],
+            'folder_name': {"$regex": f"^{re.escape(folder['folder_name'])}$", "$options": "i"},
             'in_trash': {'$ne': True}
         })
         
@@ -1922,7 +1926,15 @@ def login():
             }
             db.sessions.insert_one(session_data)
             
-            redirect_url = url_for('admin_dashboard') if (login_as_admin and is_user_admin) else url_for('index')
+            # 🚀 DYNAMIC REDIRECT WITH COLLAB & NEXT ROUTING
+            next_target = request.args.get('next') or request.form.get('next')
+            
+            if login_as_admin and is_user_admin:
+                redirect_url = url_for('admin_dashboard')
+            elif next_target and next_target.startswith('/'):
+                redirect_url = next_target
+            else:
+                redirect_url = url_for('index')
             
             response = jsonify({
                 'status': 'success', 
@@ -2735,17 +2747,23 @@ def access_collab_room(token):
             if not session.get(f'collab_access_{folder_id}'):
                 return render_template('password_prompt.html', token=token)
 
-    # 🚀 AUTO-JOIN LOGIC: Agar user logged in hai, to use Contributors list mein jodo
+    # 🚀 AUTO-JOIN & PERMANENT CONTRIBUTORS SYNC
     if current_user.is_authenticated and current_user.username != folder['owner']:
         folders_collection.update_one(
             {"_id": folder['_id']},
-            {"$addToSet": {"contributors": current_user.username}}
+            {
+                "$addToSet": {"contributors": current_user.username},
+                "$set": {"is_collab": True}
+            }
         )
 
-    # Fetch all photos uploaded to this room
-    images = list(images_collection.find({"folder_name": folder['folder_name'], "in_trash": False}).sort("uploaded_at", -1))
+    # Case-insensitive photos fetch
+    images = list(images_collection.find({
+        "folder_name": {"$regex": f"^{re.escape(folder['folder_name'])}$", "$options": "i"},
+        "in_trash": False
+    }).sort("uploaded_at", -1))
+    
     return render_template('collab_room.html', folder=folder, images=images)
-
 
 @app.route('/collab/upload/<token>', methods=['POST'])
 def collab_upload(token):

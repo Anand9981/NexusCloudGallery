@@ -52,13 +52,13 @@
     </section>
     {% endif %}
 
-<!-- 📁 Personal Cloud Folders -->
+    <!-- 📁 Personal Cloud Folders -->
     <section class="space-y-4">
         <h3 class="text-[10px] font-black text-slate-400 dark:text-slate-500 tracking-[0.2em] ml-1 uppercase">Cloud Folders</h3>
         
         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
             {% for folder in folders %}
-            <div class="bg-gradient-to-b from-white/90 to-slate-50/50 dark:from-[#1E293B] dark:to-[#111827] rounded-[24px] border-2 {% if folder.has_collab_uploads %}border-purple-300 dark:border-purple-800/80 shadow-purple-500/5{% else %}border-slate-200/70 dark:border-slate-700/60{% endif %} shadow-[0_15px_35px_-5px_rgba(148,163,184,0.18)] dark:shadow-[0_20px_40px_-10px_rgba(0,0,0,0.5)] group hover:shadow-[0_20px_40px_-5px_rgba(59,130,246,0.18)] hover:border-blue-500/60 dark:hover:border-blue-500/50 transition-all duration-300 relative z-10 flex flex-col min-h-[190px]">
+            <div class="bg-gradient-to-b from-white/90 to-slate-50/50 dark:from-[#1E293B] dark:to-[#111827] rounded-[24px] border-2 {% if folder.has_collab_uploads %}border-purple-400 dark:border-purple-600 shadow-lg shadow-purple-500/10{% else %}border-slate-200/70 dark:border-slate-700/60{% endif %} shadow-[0_15px_35px_-5px_rgba(148,163,184,0.18)] dark:shadow-[0_20px_40px_-10px_rgba(0,0,0,0.5)] group hover:shadow-[0_20px_40px_-5px_rgba(59,130,246,0.18)] hover:border-blue-500/60 dark:hover:border-blue-500/50 transition-all duration-300 relative z-10 flex flex-col min-h-[190px]">
                 
                 <!-- 3-Dots Dropdown -->
                 <div class="absolute top-4 right-4" x-data="{ open: false }">
@@ -79,7 +79,7 @@
 
                 <!-- 📁 / 🤝 DYNAMIC FOLDER ICON -->
                 <div class="px-5 pt-5 flex items-center justify-start">
-                    <div class="w-10 h-10 {% if folder.has_collab_uploads %}bg-purple-500/10 text-purple-600 border-purple-200/60 dark:border-purple-800/60{% else %}bg-gradient-to-br from-white to-slate-100/80 dark:from-slate-800 dark:to-slate-900 border-slate-200/60 dark:border-slate-700/80{% endif %} border rounded-xl flex items-center justify-center text-xl shadow-sm group-hover:scale-110 group-hover:rotate-2 transition-all duration-300 select-none">
+                    <div class="w-10 h-10 {% if folder.has_collab_uploads %}bg-purple-500/10 text-purple-600 border-purple-300 dark:border-purple-800/80{% else %}bg-gradient-to-br from-white to-slate-100/80 dark:from-slate-800 dark:to-slate-900 border-slate-200/60 dark:border-slate-700/80{% endif %} border rounded-xl flex items-center justify-center text-xl shadow-sm group-hover:scale-110 group-hover:rotate-2 transition-all duration-300 select-none">
                         {% if folder.has_collab_uploads %}
                             🤝
                         {% else %}
@@ -102,13 +102,13 @@
                 </div>
 
                 <div class="px-5 py-3.5 flex justify-between items-center select-none">
-                    <a href="/folder/{{ folder.folder_name }}" class="text-[7px] font-black text-nexus hover:underline tracking-tight uppercase">Open Folder ➔</a>
+                    <a href="/folder/{{ folder.folder_name }}" class="text-[8px] font-black text-nexus hover:underline tracking-tight uppercase">Open Folder ➔</a>
                     
                     <div class="flex items-center gap-1.5">
                         <span id="badge-{{ folder._id }}" class="text-[8px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider {{ 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' if folder.is_public else 'bg-rose-500/10 text-rose-600 dark:text-rose-400' }}">
                             {{ 'Public' if folder.is_public else 'Private' }}
                         </span>
-                        <div class="w-5 h-5 bg-blue-500/10 border border-blue-100 dark:border-blue-900/40 rounded-md flex items-center justify-center text-[8px]">
+                        <div class="w-5 h-5 bg-blue-500/10 border border-blue-100 dark:border-blue-900/40 rounded-md flex items-center justify-center text-[10px]">
                             {{ '🔓' if folder.is_public else '🔒' }}
                         </div>
                     </div>
