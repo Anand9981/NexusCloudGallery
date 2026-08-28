@@ -9,6 +9,7 @@ import json
 import traceback
 import zipfile
 import urllib.request
+import exifread
 from flask import send_file
 from PIL import Image
 from io import BytesIO
@@ -31,6 +32,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate, make_msgid
 from apscheduler.schedulers.background import BackgroundScheduler
+from PIL.ExifTags import TAGS, GPSTAGS
 
 # ---------------------------------------------------
 # CONFIGURATION & CLOUD SETUP
@@ -81,6 +83,7 @@ ACCESS_KEY = os.getenv('AWS_ACCESS_KEY_ID')
 SECRET_KEY_AWS = os.getenv('AWS_SECRET_ACCESS_KEY')
 BUCKET_NAME = os.getenv('AWS_BUCKET_NAME')
 REGION = os.getenv('AWS_REGION', 'us-east-1')
+MAPBOX_API_KEY = os.getenv('MAPBOX_API_KEY')
 
 s3_client = boto3.client('s3', aws_access_key_id=ACCESS_KEY, aws_secret_access_key=SECRET_KEY_AWS, region_name=REGION)
 rek_client = boto3.client('rekognition', aws_access_key_id=ACCESS_KEY, aws_secret_access_key=SECRET_KEY_AWS, region_name=REGION)
@@ -108,6 +111,81 @@ except rek_client.exceptions.ResourceAlreadyExistsException:
     pass
 except Exception as e:
     print(f"Face Collection Warning: {e}")
+
+# ---------------------------------------------------
+# 🌍 GEOSPATIAL EXIF EXTRACTION ENGINE (WITH LIVE TERMINAL LOGS)
+# ---------------------------------------------------
+def extract_gps_info(file_bytes):
+    try:
+        print("🔍 [GPS SYSTEM] Scanning uploaded image for EXIF location data...")
+        tags = exifread.process_file(BytesIO(file_bytes), details=False)
+        
+        if 'GPS GPSLatitude' not in tags or 'GPS GPSLongitude' not in tags:
+            print("❌ [GPS SYSTEM] NO LOCATION TAGS FOUND! (Turn on Location in Camera settings or don't share via WhatsApp before uploading)")
+            return None, None
+            
+        lat_tag = tags['GPS GPSLatitude']
+        lon_tag = tags['GPS GPSLongitude']
+        lat_ref = tags.get('GPS GPSLatitudeRef')
+        lon_ref = tags.get('GPS GPSLongitudeRef')
+        
+        lat_ref_val = str(lat_ref.values).upper() if lat_ref else 'N'
+        lon_ref_val = str(lon_ref.values).upper() if lon_ref else 'E'
+        
+        def convert_to_degrees(value):
+            # Safe parsing for Samsung/iPhone complex ratios
+            d = float(value.values[0].num) / float(value.values[0].den)
+            m = float(value.values[1].num) / float(value.values[1].den)
+            s = float(value.values[2].num) / float(value.values[2].den)
+            return d + (m / 60.0) + (s / 3600.0)
+            
+        lat = convert_to_degrees(lat_tag)
+        lon = convert_to_degrees(lon_tag)
+        
+        if 'S' in lat_ref_val: lat = -lat
+        if 'W' in lon_ref_val: lon = -lon
+        
+        print(f"✅ [GPS SYSTEM] SUCCESS! Coordinates Found: Lat: {round(lat, 6)}, Lon: {round(lon, 6)}")
+        return round(lat, 6), round(lon, 6)
+        
+    except Exception as e:
+        print(f"❌ [GPS SYSTEM] CRITICAL ERROR parsing EXIF: {e}")
+        return None, None
+
+# ---------------------------------------------------
+# 🌍 GEOSPATIAL EXIF EXTRACTION ENGINE (USING EXIFREAD)
+# ---------------------------------------------------
+def extract_gps_info(file_bytes):
+    try:
+        # Exifread original binary data ko directly parse karta hai (100% accuracy)
+        tags = exifread.process_file(BytesIO(file_bytes), details=False)
+        
+        lat = tags.get('GPS GPSLatitude')
+        lat_ref = tags.get('GPS GPSLatitudeRef')
+        lon = tags.get('GPS GPSLongitude')
+        lon_ref = tags.get('GPS GPSLongitudeRef')
+
+        if lat and lon and lat_ref and lon_ref:
+            def to_decimal(value):
+                # Handle ratio objects automatically
+                d, m, s = value.values
+                dec = float(d.num)/float(d.den) + (float(m.num)/float(m.den))/60.0 + (float(s.num)/float(s.den))/3600.0
+                return dec
+
+            lat_val = to_decimal(lat)
+            if str(lat_ref.values[0]) == 'S': 
+                lat_val = -lat_val
+
+            lon_val = to_decimal(lon)
+            if str(lon_ref.values[0]) == 'W': 
+                lon_val = -lon_val
+
+            return round(lat_val, 6), round(lon_val, 6)
+            
+    except Exception as e:
+        print(f"EXIFREAD Parsing Error: {e}")
+        
+    return None, None
 
 RECOVERY_OTP_CACHE = {} 
 
@@ -750,6 +828,9 @@ def upload():
             original_url = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com/{filename}"
             thumb_url = f"https://{BUCKET_NAME}.s3.{REGION}.amazonaws.com/{thumb_filename}"
             
+            # 🌍 EXTRACT GPS COORDINATES
+            lat, lon = extract_gps_info(file_bytes)
+            
             # ---------------------------------------------------
             # 🧑‍🤝‍🧑 LOGGED-IN ONLY, HUMAN FACE RECOGNITION
             # ---------------------------------------------------
@@ -817,6 +898,8 @@ def upload():
                 "people": list(set(detected_people_ids)),
                 "uploader": uploader, 
                 "folder_name": selected_folder,
+                "latitude": lat,
+                "longitude": lon, 
                 "views": 0, "likes": 0, "shares": 0, "downloads": 0, 
                 "is_favorite": False, "in_trash": False, 
                 "uploaded_at": datetime.utcnow(), 
@@ -2824,6 +2907,10 @@ def collab_upload(token):
             except:
                 pass
 
+            # 🌍 EXTRACT GPS FROM COLLAB UPLOADS TOO
+            # This keeps the same geospatial behaviour as normal uploads.
+            lat, lon = extract_gps_info(file_bytes)
+
             images_collection.insert_one({
                 "filename": orig_name,
                 "s3_key": filename,
@@ -2832,6 +2919,8 @@ def collab_upload(token):
                 "tags": ai_tags,
                 "uploader": uploader_identity,
                 "folder_name": folder['folder_name'],
+                "latitude": lat,
+                "longitude": lon,
                 "views": 0, "likes": 0, "shares": 0, "downloads": 0,
                 "is_favorite": False, "in_trash": False,
                 "uploaded_at": datetime.utcnow(),
@@ -2842,6 +2931,27 @@ def collab_upload(token):
             print(f"Collab upload error: {e}")
 
     return jsonify({"status": "success", "message": f"Successfully added {uploaded_count} photos to {folder['folder_name']}!"})
+
+# ---------------------------------------------------
+# 🌍 3D GEOSPATIAL MAP VIEW
+# ---------------------------------------------------
+@app.route('/map')
+@login_required
+def map_view():
+    # Only the current user's non-trash assets are exposed to the map.
+    # Both coordinates must exist so frontend never receives a broken point.
+    geo_images = list(images_collection.find({
+        "uploader": current_user.username,
+        "in_trash": False,
+        "latitude": {"$type": "number"},
+        "longitude": {"$type": "number"}
+    }).sort("uploaded_at", -1))
+
+    return render_template(
+        'map.html',
+        geo_images=json.loads(json_util.dumps(geo_images)),
+        mapbox_key=MAPBOX_API_KEY
+    )
 
 # 🚀 APP.RUN KO HAMESHA FILE KE EK DUM LAST MEIN HONA CHAHIYE
 if __name__ == '__main__':

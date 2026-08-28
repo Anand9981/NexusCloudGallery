@@ -1,0 +1,515 @@
+{% extends "base.html" %}
+
+{% block content %}
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.4.0/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@6.4.0/dist/maplibre-gl.js"></script>
+
+<div class="nexus-map-shell">
+    <div id="nexus-map"></div>
+
+    <div class="map-topbar">
+        <div class="map-title-card">
+            <div class="map-kicker">🌍 NEXUS GEO MEMORY</div>
+            <h1>My Photos Across India</h1>
+            <p><strong id="asset-count">{{ geo_images|length }}</strong> GPS memories • live 3D globe</p>
+        </div>
+        <div id="map-status" class="map-status">LOADING EARTH…</div>
+    </div>
+
+    <div class="map-controls">
+        <button type="button" class="map-control-btn" onclick="jumpToLiveLocation()">📍 <span>MY LOCATION</span></button>
+        <button type="button" class="map-control-btn" onclick="returnToIndia()">🇮🇳 <span>INDIA</span></button>
+        <button type="button" class="map-control-btn" onclick="resetGlobe()">🌐 <span>GLOBE</span></button>
+    </div>
+
+    <div class="map-legend">
+        <div><i class="legend-dot live"></i> Live location</div>
+        <div><i class="legend-dot photo"></i> Photo location</div>
+        <div><i class="cluster-dot">12</i> Cluster</div>
+    </div>
+
+    <aside id="photo-panel" class="photo-panel" aria-hidden="true">
+        <button class="panel-close" onclick="closePhotoPanel()">×</button>
+        <div id="panel-content"></div>
+    </aside>
+
+    <div id="jump-hud" class="jump-hud" aria-hidden="true">
+        <div class="jump-spinner"></div>
+        <div>
+            <div class="jump-kicker">NEXUS JUMP</div>
+            <div id="jump-label">LOCKING DESTINATION…</div>
+        </div>
+    </div>
+
+    <div id="map-error" class="map-error hidden"></div>
+</div>
+
+<script>
+const PHOTO_DATA = {{ geo_images | tojson }};
+const INDIA_CENTER = [78.9629, 20.5937]; // lng, lat
+const OPENFREE_MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+const TERRAIN_URL = 'https://tiles.mapterhorn.com/tilejson.json';
+
+let map = null;
+let liveCoords = null;
+let currentFocus = [...INDIA_CENTER];
+let liveMarker = null;
+let liveAccuracy = null;
+let jumpToken = 0;
+let isJumping = false;
+
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+}
+
+function validCoord(value) {
+    const n = Number(value);
+    return Number.isFinite(n);
+}
+
+function setStatus(text) {
+    const el = document.getElementById('map-status');
+    if (el) el.textContent = text;
+}
+
+function showError(message) {
+    const el = document.getElementById('map-error');
+    if (!el) return;
+    el.innerHTML = escapeHtml(message);
+    el.classList.remove('hidden');
+}
+
+function hideError() {
+    document.getElementById('map-error')?.classList.add('hidden');
+}
+
+function usablePhotos() {
+    return PHOTO_DATA.filter(p => validCoord(p.latitude) && validCoord(p.longitude));
+}
+
+function photoCollection() {
+    return {
+        type: 'FeatureCollection',
+        features: usablePhotos().map((img, index) => ({
+            type: 'Feature',
+            geometry: {
+                type: 'Point',
+                coordinates: [Number(img.longitude), Number(img.latitude)]
+            },
+            properties: {
+                id: String(img._id?.$oid || img._id || index),
+                filename: img.filename || 'Photo',
+                thumb_url: img.thumb_url || img.url || '',
+                url: img.url || '',
+                folder_name: img.folder_name || 'General',
+                latitude: Number(img.latitude),
+                longitude: Number(img.longitude)
+            }
+        }))
+    };
+}
+
+function showJumpHud(label) {
+    const hud = document.getElementById('jump-hud');
+    const text = document.getElementById('jump-label');
+    if (text) text.textContent = label || 'PHOTO LOCATION';
+    hud?.classList.add('active');
+    hud?.setAttribute('aria-hidden', 'false');
+}
+
+function hideJumpHud() {
+    const hud = document.getElementById('jump-hud');
+    hud?.classList.remove('active');
+    hud?.setAttribute('aria-hidden', 'true');
+}
+
+function photoGroupAt(lng, lat) {
+    // GPS coordinates usually match exactly after our 6-decimal DB storage.
+    // A tiny tolerance also groups photos from the same camera location.
+    const tolerance = 0.00008;
+    return usablePhotos().filter(p =>
+        Math.abs(Number(p.longitude) - lng) <= tolerance &&
+        Math.abs(Number(p.latitude) - lat) <= tolerance
+    );
+}
+
+function openPhotoPanel(images, lat, lng, label) {
+    const panel = document.getElementById('photo-panel');
+    const content = document.getElementById('panel-content');
+    if (!panel || !content) return;
+
+    const cards = images.slice(0, 15).map(img => `
+        <a class="panel-photo" href="${escapeHtml(img.url || '#')}" target="_blank" rel="noopener">
+            <img src="${escapeHtml(img.thumb_url || img.url || '')}" alt="${escapeHtml(img.filename || 'Photo')}">
+            <div>
+                <strong>${escapeHtml(img.filename || 'Photo')}</strong>
+                <small>ROOM: ${escapeHtml(img.folder_name || 'General')}</small>
+            </div>
+        </a>
+    `).join('');
+
+    content.innerHTML = `
+        <div class="panel-kicker">${images.length} MEMORY${images.length === 1 ? '' : 'IES'}</div>
+        <h2>${escapeHtml(label || 'Pinned location')}</h2>
+        <div class="coords">${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}</div>
+        <div class="panel-actions">
+            <button onclick="openExternalMaps(${Number(lat)}, ${Number(lng)})">🧭 GO THERE</button>
+            <button onclick="closePhotoPanel()">HIDE</button>
+        </div>
+        <div class="panel-divider"></div>
+        <div class="panel-photo-list">${cards}</div>
+        ${images.length > 15 ? '<p class="panel-more">Showing first 15 photos at this location.</p>' : ''}
+    `;
+
+    panel.classList.add('open');
+    panel.setAttribute('aria-hidden', 'false');
+}
+
+function closePhotoPanel() {
+    const panel = document.getElementById('photo-panel');
+    panel?.classList.remove('open');
+    panel?.setAttribute('aria-hidden', 'true');
+}
+
+function openExternalMaps(lat, lng) {
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(lat)},${encodeURIComponent(lng)}`;
+    window.open(url, '_blank', 'noopener');
+}
+
+function createLiveMarker(lng, lat) {
+    if (liveMarker) liveMarker.remove();
+
+    const el = document.createElement('div');
+    el.className = 'live-marker';
+    el.innerHTML = '<span class="live-pulse"></span><span class="live-core"></span>';
+
+    liveMarker = new maplibregl.Marker({element: el, anchor: 'center'})
+        .setLngLat([lng, lat])
+        .setPopup(new maplibregl.Popup({offset: 18}).setHTML('<strong style="font:800 11px sans-serif">📍 You are here</strong>'))
+        .addTo(map);
+}
+
+function locateUser(autoFly = false) {
+    if (!navigator.geolocation) {
+        setStatus('GPS NOT AVAILABLE');
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(position => {
+        liveCoords = [position.coords.longitude, position.coords.latitude];
+        liveAccuracy = position.coords.accuracy;
+        createLiveMarker(liveCoords[0], liveCoords[1]);
+
+        if (autoFly) {
+            cinematicJump(liveCoords, 'YOUR LIVE LOCATION', () => {
+                setStatus('LIVE LOCATION LOCKED');
+            });
+        } else {
+            setStatus('3D EARTH ONLINE');
+        }
+    }, error => {
+        console.warn('Geolocation:', error);
+        setStatus('3D EARTH ONLINE');
+    }, {enableHighAccuracy: true, timeout: 12000, maximumAge: 30000});
+}
+
+function cinematicJump(target, label, onArrive) {
+    if (!map || !Array.isArray(target)) return;
+
+    const myJump = ++jumpToken;
+    const destination = [...target];
+    const start = [...currentFocus];
+    const distance = Math.abs(start[0] - destination[0]) + Math.abs(start[1] - destination[1]);
+
+    map.stop();
+    isJumping = true;
+    closePhotoPanel();
+    showJumpHud(label);
+    setStatus('JUMPING THROUGH THE GLOBE…');
+
+    const finish = () => {
+        if (myJump !== jumpToken) return;
+        currentFocus = [...destination];
+        isJumping = false;
+        hideJumpHud();
+        if (typeof onArrive === 'function') onArrive();
+    };
+
+    // Short local move: one smooth 3D dive is enough.
+    if (distance < 1.2) {
+        map.once('moveend', finish);
+        map.flyTo({
+            center: destination,
+            zoom: 15.2,
+            pitch: 72,
+            bearing: map.getBearing() + 28,
+            duration: 2600,
+            essential: true
+        });
+        return;
+    }
+
+    // Long move: pull up to near-globe height, then dive into the target.
+    map.once('moveend', () => {
+        if (myJump !== jumpToken) return;
+        map.once('moveend', finish);
+        map.flyTo({
+            center: destination,
+            zoom: 13.8,
+            pitch: 74,
+            bearing: 24,
+            speed: 0.72,
+            curve: 1.55,
+            essential: true
+        });
+    });
+
+    map.flyTo({
+        center: start,
+        zoom: 1.8,
+        pitch: 38,
+        bearing: map.getBearing() + 18,
+        duration: 2400,
+        essential: true
+    });
+}
+
+function focusPhoto(feature) {
+    const coords = feature.geometry.coordinates;
+    const props = feature.properties || {};
+    const lat = Number(coords[1]);
+    const lng = Number(coords[0]);
+    const images = photoGroupAt(lng, lat);
+
+    cinematicJump(coords, props.filename || 'PHOTO LOCATION', () => {
+        openPhotoPanel(images.length ? images : [{
+            filename: props.filename,
+            thumb_url: props.thumb_url,
+            url: props.url,
+            folder_name: props.folder_name
+        }], lat, lng, props.filename || 'Pinned memory');
+        setStatus('DESTINATION LOCKED');
+    });
+}
+
+function setupPhotoLayers() {
+    map.addSource('photo-points', {
+        type: 'geojson',
+        data: photoCollection(),
+        cluster: true,
+        clusterMaxZoom: 13,
+        clusterRadius: 58,
+        clusterMinPoints: 2
+    });
+
+    map.addLayer({
+        id: 'photo-cluster-glow',
+        type: 'circle',
+        source: 'photo-points',
+        filter: ['has', 'point_count'],
+        paint: {
+            'circle-color': '#8b5cf6',
+            'circle-radius': ['step', ['get', 'point_count'], 25, 10, 30, 30, 36, 100, 44],
+            'circle-opacity': 0.20,
+            'circle-blur': 0.75
+        }
+    });
+
+    map.addLayer({
+        id: 'photo-clusters',
+        type: 'circle',
+        source: 'photo-points',
+        filter: ['has', 'point_count'],
+        paint: {
+            'circle-color': '#7c3aed',
+            'circle-radius': ['step', ['get', 'point_count'], 18, 10, 22, 30, 27, 100, 32],
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 2,
+            'circle-opacity': 0.95
+        }
+    });
+
+    map.addLayer({
+        id: 'photo-cluster-count',
+        type: 'symbol',
+        source: 'photo-points',
+        filter: ['has', 'point_count'],
+        layout: {
+            'text-field': ['get', 'point_count_abbreviated'],
+            'text-size': 11,
+            'text-font': ['Open Sans Bold']
+        },
+        paint: {'text-color': '#ffffff'}
+    });
+
+    map.addLayer({
+        id: 'photo-glow',
+        type: 'circle',
+        source: 'photo-points',
+        filter: ['!', ['has', 'point_count']],
+        paint: {
+            'circle-color': '#22d3ee',
+            'circle-radius': 18,
+            'circle-opacity': 0.18,
+            'circle-blur': 0.75
+        }
+    });
+
+    map.addLayer({
+        id: 'photo-points',
+        type: 'circle',
+        source: 'photo-points',
+        filter: ['!', ['has', 'point_count']],
+        paint: {
+            'circle-color': '#06b6d4',
+            'circle-radius': 8,
+            'circle-stroke-color': '#ffffff',
+            'circle-stroke-width': 2.5
+        }
+    });
+
+    map.on('click', 'photo-clusters', e => {
+        const cluster = e.features?.[0];
+        if (!cluster) return;
+        map.getSource('photo-points').getClusterExpansionZoom(cluster.properties.cluster_id, (err, zoom) => {
+            if (err) return;
+            map.easeTo({
+                center: cluster.geometry.coordinates,
+                zoom: Math.min(zoom + 0.5, 14),
+                pitch: 68,
+                bearing: map.getBearing() + 20,
+                duration: 1500,
+                essential: true
+            });
+        });
+    });
+
+    map.on('click', 'photo-points', e => {
+        const feature = e.features?.[0];
+        if (feature) focusPhoto(feature);
+    });
+
+    ['photo-clusters', 'photo-points'].forEach(layer => {
+        map.on('mouseenter', layer, () => map.getCanvas().style.cursor = 'pointer');
+        map.on('mouseleave', layer, () => map.getCanvas().style.cursor = '');
+    });
+}
+
+function initializeMap() {
+    const count = usablePhotos().length;
+    document.getElementById('asset-count').textContent = count;
+
+    map = new maplibregl.Map({
+        container: 'nexus-map',
+        style: OPENFREE_MAP_STYLE,
+        center: INDIA_CENTER,
+        zoom: 4.2,
+        pitch: 45,
+        bearing: 0,
+        projection: 'globe',
+        renderWorldCopies: false,
+        maxPitch: 85,
+        attributionControl: true
+    });
+
+    map.addControl(new maplibregl.NavigationControl({visualizePitch: true}), 'bottom-right');
+    map.addControl(new maplibregl.ScaleControl({maxWidth: 120, unit: 'metric'}), 'bottom-left');
+
+    map.on('load', () => {
+        hideError();
+
+        // Free global elevation source used by MapLibre's official examples.
+        try {
+            map.addSource('nexus-terrain', {
+                type: 'raster-dem',
+                url: TERRAIN_URL,
+                tileSize: 256
+            });
+            map.setTerrain({source: 'nexus-terrain', exaggeration: 1.15});
+        } catch (e) {
+            console.warn('Terrain unavailable:', e);
+        }
+
+        // Subtle satellite texture over the free OpenFreeMap base.
+        // It is intentionally low-opacity so roads/labels remain readable.
+        try {
+            map.addSource('nexus-satellite', {
+                type: 'raster',
+                tiles: ['https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg'],
+                tileSize: 256,
+                maxzoom: 14
+            });
+            map.addLayer({
+                id: 'nexus-satellite-layer',
+                type: 'raster',
+                source: 'nexus-satellite',
+                paint: {'raster-opacity': 0.22}
+            });
+        } catch (e) {
+            console.warn('Satellite layer unavailable:', e);
+        }
+
+        setupPhotoLayers();
+        setStatus(count ? `${count} GPS MEMORIES READY` : 'NO GPS MEMORIES YET');
+        locateUser(false);
+    });
+
+    map.on('error', event => {
+        console.error('MapLibre error:', event?.error || event);
+        // Do not hide the whole map for a single optional tile failure.
+        if (!map?.isStyleLoaded()) {
+            showError('The map style could not be loaded. Check your internet connection and refresh.');
+            setStatus('MAP LOAD ERROR');
+        }
+    });
+}
+
+function jumpToLiveLocation() {
+    if (liveCoords) {
+        cinematicJump(liveCoords, 'YOUR LIVE LOCATION', () => setStatus('LIVE LOCATION LOCKED'));
+    } else {
+        locateUser(true);
+    }
+}
+
+function returnToIndia() {
+    cinematicJump(INDIA_CENTER, 'INDIA', () => setStatus('INDIA VIEW READY'));
+}
+
+function resetGlobe() {
+    jumpToken++;
+    isJumping = false;
+    hideJumpHud();
+    closePhotoPanel();
+    currentFocus = [...INDIA_CENTER];
+    map.stop();
+    map.flyTo({center: INDIA_CENTER, zoom: 1.35, pitch: 22, bearing: 0, duration: 2200, essential: true});
+    setStatus('GLOBAL VIEW');
+}
+
+document.addEventListener('DOMContentLoaded', initializeMap);
+</script>
+
+<style>
+.nexus-map-shell{position:relative;width:100%;height:86vh;min-height:620px;overflow:hidden;border-radius:2rem;background:#020617;border:1px solid rgba(148,163,184,.22);box-shadow:0 25px 80px rgba(15,23,42,.28);isolation:isolate}
+#nexus-map{position:absolute;inset:0}
+.map-topbar{position:absolute;top:20px;left:20px;right:20px;z-index:10;display:flex;justify-content:space-between;align-items:flex-start;gap:16px;pointer-events:none}
+.map-title-card{padding:17px 21px;background:rgba(2,6,23,.75);backdrop-filter:blur(18px);border:1px solid rgba(255,255,255,.13);border-radius:20px;box-shadow:0 18px 50px rgba(0,0,0,.25)}
+.map-kicker,.panel-kicker,.jump-kicker{color:#67e8f9;font:900 9px/1 sans-serif;letter-spacing:.2em;text-transform:uppercase}
+.map-title-card h1{margin:7px 0 5px;color:#fff;font:900 24px/1.1 sans-serif;letter-spacing:-.035em}
+.map-title-card p{margin:0;color:#cbd5e1;font:700 10px/1.4 sans-serif;letter-spacing:.08em;text-transform:uppercase}
+.map-status{padding:10px 14px;background:rgba(2,6,23,.78);border:1px solid rgba(103,232,249,.25);border-radius:999px;color:#a5f3fc;font:900 9px/1 sans-serif;letter-spacing:.12em;white-space:nowrap}
+.map-controls{position:absolute;top:92px;right:20px;z-index:12;display:flex;flex-direction:column;gap:8px}
+.map-control-btn{border:1px solid rgba(255,255,255,.16);background:rgba(2,6,23,.76);color:#fff;backdrop-filter:blur(14px);border-radius:13px;padding:10px 12px;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.22);font:900 9px/1 sans-serif;letter-spacing:.1em;transition:.2s;display:flex;align-items:center;gap:8px}
+.map-control-btn:hover{transform:translateY(-1px) scale(1.02);background:rgba(15,23,42,.94)}
+.map-legend{position:absolute;bottom:20px;left:20px;z-index:10;padding:11px 13px;border-radius:14px;background:rgba(2,6,23,.72);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(14px);color:#e2e8f0;font:800 9px/1.8 sans-serif}
+.legend-dot{display:inline-block;width:9px;height:9px;border-radius:50%;border:1.5px solid #fff;margin-right:7px}.legend-dot.live{background:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.2)}.legend-dot.photo{background:#06b6d4}.cluster-dot{display:inline-flex;width:18px;height:18px;align-items:center;justify-content:center;border-radius:50%;background:#7c3aed;border:2px solid #fff;color:#fff;font-size:7px;font-style:normal;margin-right:5px}
+.live-marker{width:30px;height:30px;position:relative}.live-core{position:absolute;left:7px;top:7px;width:16px;height:16px;border-radius:50%;background:#2563eb;border:3px solid #fff;box-shadow:0 0 22px rgba(37,99,235,.95);z-index:2}.live-pulse{position:absolute;inset:0;border:2px solid #60a5fa;border-radius:50%;animation:nexusPulse 1.8s ease-out infinite}@keyframes nexusPulse{0%{transform:scale:.35);opacity:1}100%{transform:scale(1.65);opacity:0}}
+.photo-panel{position:absolute;top:20px;right:20px;bottom:20px;width:min(390px,calc(100% - 40px));z-index:20;transform:translateX(calc(100% + 30px));opacity:0;transition:.35s cubic-bezier(.2,.8,.2,1);border-radius:24px;background:rgba(2,6,23,.9);border:1px solid rgba(255,255,255,.13);color:#fff;backdrop-filter:blur(22px);box-shadow:0 25px 70px rgba(0,0,0,.4);overflow:auto}.photo-panel.open{transform:translateX(0);opacity:1}.panel-close{position:absolute;right:12px;top:12px;width:30px;height:30px;border-radius:50%;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.08);color:#fff;font-size:20px;cursor:pointer;z-index:2}#panel-content{padding:24px}.panel-kicker{margin-bottom:8px}.panel-photo-list{display:grid;gap:9px}.panel-photo{display:flex;gap:10px;align-items:center;padding:7px;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);color:#fff;text-decoration:none}.panel-photo img{width:64px;height:64px;object-fit:cover;border-radius:10px;background:#0f172a}.panel-photo strong{display:block;font:900 10px/1.25 sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:245px}.panel-photo small{display:block;margin-top:5px;color:#94a3b8;font:800 8px/1.2 sans-serif;letter-spacing:.08em}.panel-photo-list+.panel-more,.panel-more{color:#94a3b8;font:700 9px/1.4 sans-serif}.coords{color:#94a3b8;font:700 10px/1.4 ui-monospace,monospace}.panel-actions{display:flex;gap:8px;margin-top:14px}.panel-actions button{flex:1;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.07);color:#fff;border-radius:11px;padding:10px;cursor:pointer;font:900 9px/1 sans-serif;letter-spacing:.08em}.panel-divider{height:1px;background:rgba(255,255,255,.09);margin:18px 0}
+#panel-content h2{margin:6px 0 4px;color:#fff;font:900 20px/1.15 sans-serif;text-transform:uppercase}
+.jump-hud{position:absolute;left:50%;top:50%;z-index:25;display:flex;align-items:center;gap:12px;padding:12px 17px;border-radius:999px;background:rgba(2,6,23,.8);border:1px solid rgba(103,232,249,.25);backdrop-filter:blur(14px);color:#fff;opacity:0;transform:translate(-50%,-50%) scale(.86);pointer-events:none;transition:.22s;box-shadow:0 20px 60px rgba(0,0,0,.3)}.jump-hud.active{opacity:1;transform:translate(-50%,-50%) scale(1)}.jump-spinner{width:26px;height:26px;border:2px solid rgba(103,232,249,.25);border-top-color:#67e8f9;border-right-color:#38bdf8;border-radius:50%;animation:nexusSpin .8s linear infinite}@keyframes nexusSpin{to{transform:rotate(360deg)}}#jump-label{margin-top:4px;font:900 10px/1.1 sans-serif;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:uppercase}
+.map-error{position:absolute;z-index:30;left:50%;top:50%;transform:translate(-50%,-50%);width:min(500px,calc(100% - 40px));padding:18px;border-radius:16px;background:rgba(127,29,29,.94);color:#fee2e2;border:1px solid rgba(254,202,202,.24);font:800 11px/1.5 sans-serif}.hidden{display:none}
+.maplibregl-popup-content{border-radius:12px;font:700 11px sans-serif}.maplibregl-ctrl-group{border-radius:12px!important;overflow:hidden}.maplibregl-ctrl-bottom-left{margin-left:8px;margin-bottom:8px}.maplibregl-ctrl-bottom-right{margin-right:8px;margin-bottom:8px}
+@media(max-width:760px){.nexus-map-shell{height:82vh;min-height:560px;border-radius:1.3rem}.map-topbar{top:10px;left:10px;right:10px}.map-title-card{padding:13px 15px}.map-title-card h1{font-size:18px}.map-title-card p{font-size:8px}.map-status{display:none}.map-controls{top:80px;right:10px}.map-control-btn span{display:none}.map-control-btn{width:40px;height:40px;justify-content:center;padding:0;font-size:16px}.map-legend{left:10px;bottom:10px}.photo-panel{top:10px;right:10px;bottom:10px;width:calc(100% - 20px)}}
+</style>
+{% endblock %}
