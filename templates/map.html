@@ -2,7 +2,6 @@
 
 {% block content %}
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.4.0/dist/maplibre-gl.css">
-<script src="https://unpkg.com/maplibre-gl@6.4.0/dist/maplibre-gl.js"></script>
 
 <div class="nexus-map-shell">
     <div id="nexus-map"></div>
@@ -44,7 +43,9 @@
     <div id="map-error" class="map-error hidden"></div>
 </div>
 
-<script>
+<script type="module">
+import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.4.0/dist/maplibre-gl.mjs';
+
 const PHOTO_DATA = {{ geo_images | tojson }};
 const INDIA_CENTER = [78.9629, 20.5937]; // lng, lat
 const OPENFREE_MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
@@ -430,27 +431,9 @@ function initializeMap() {
             console.warn('Terrain unavailable:', e);
         }
 
-        // Subtle satellite texture over the free OpenFreeMap base.
-        // It is intentionally low-opacity so roads/labels remain readable.
-        try {
-            map.addSource('nexus-satellite', {
-                type: 'raster',
-                tiles: ['https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2020_3857/default/g/{z}/{y}/{x}.jpg'],
-                tileSize: 256,
-                maxzoom: 14
-            });
-            map.addLayer({
-                id: 'nexus-satellite-layer',
-                type: 'raster',
-                source: 'nexus-satellite',
-                paint: {'raster-opacity': 0.22}
-            });
-        } catch (e) {
-            console.warn('Satellite layer unavailable:', e);
-        }
-
         setupPhotoLayers();
         setStatus(count ? `${count} GPS MEMORIES READY` : 'NO GPS MEMORIES YET');
+        setTimeout(() => map.resize(), 100);
         locateUser(false);
     });
 
