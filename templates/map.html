@@ -470,6 +470,14 @@ function resetGlobe() {
     setStatus('GLOBAL VIEW');
 }
 
+// This file uses an ES module, so inline HTML onclick handlers cannot see
+// module-scoped functions unless we explicitly expose them on window.
+window.jumpToLiveLocation = jumpToLiveLocation;
+window.returnToIndia = returnToIndia;
+window.resetGlobe = resetGlobe;
+window.closePhotoPanel = closePhotoPanel;
+window.openExternalMaps = openExternalMaps;
+
 document.addEventListener('DOMContentLoaded', initializeMap);
 </script>
 

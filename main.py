@@ -113,78 +113,123 @@ except Exception as e:
     print(f"Face Collection Warning: {e}")
 
 # ---------------------------------------------------
-# 🌍 GEOSPATIAL EXIF EXTRACTION ENGINE (WITH LIVE TERMINAL LOGS)
+# 🌍 GEOSPATIAL EXIF EXTRACTION ENGINE
 # ---------------------------------------------------
-def extract_gps_info(file_bytes):
-    try:
-        print("🔍 [GPS SYSTEM] Scanning uploaded image for EXIF location data...")
-        tags = exifread.process_file(BytesIO(file_bytes), details=False)
-        
-        if 'GPS GPSLatitude' not in tags or 'GPS GPSLongitude' not in tags:
-            print("❌ [GPS SYSTEM] NO LOCATION TAGS FOUND! (Turn on Location in Camera settings or don't share via WhatsApp before uploading)")
-            return None, None
-            
-        lat_tag = tags['GPS GPSLatitude']
-        lon_tag = tags['GPS GPSLongitude']
-        lat_ref = tags.get('GPS GPSLatitudeRef')
-        lon_ref = tags.get('GPS GPSLongitudeRef')
-        
-        lat_ref_val = str(lat_ref.values).upper() if lat_ref else 'N'
-        lon_ref_val = str(lon_ref.values).upper() if lon_ref else 'E'
-        
-        def convert_to_degrees(value):
-            # Safe parsing for Samsung/iPhone complex ratios
-            d = float(value.values[0].num) / float(value.values[0].den)
-            m = float(value.values[1].num) / float(value.values[1].den)
-            s = float(value.values[2].num) / float(value.values[2].den)
-            return d + (m / 60.0) + (s / 3600.0)
-            
-        lat = convert_to_degrees(lat_tag)
-        lon = convert_to_degrees(lon_tag)
-        
-        if 'S' in lat_ref_val: lat = -lat
-        if 'W' in lon_ref_val: lon = -lon
-        
-        print(f"✅ [GPS SYSTEM] SUCCESS! Coordinates Found: Lat: {round(lat, 6)}, Lon: {round(lon, 6)}")
-        return round(lat, 6), round(lon, 6)
-        
-    except Exception as e:
-        print(f"❌ [GPS SYSTEM] CRITICAL ERROR parsing EXIF: {e}")
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    HEIF_SUPPORT = True
+except Exception as _heif_err:
+    HEIF_SUPPORT = False
+    print(f"ℹ️ [GPS SYSTEM] HEIF/HEIC decoder unavailable: {_heif_err}")
+
+def _ratio_to_float(value):
+    """Convert EXIFRead/Pillow rational values safely to float."""
+    if value is None:
+        return None
+    if hasattr(value, 'num') and hasattr(value, 'den'):
+        den = float(value.den)
+        return float(value.num) / den if den else None
+    if hasattr(value, 'numerator') and hasattr(value, 'denominator'):
+        den = float(value.denominator)
+        return float(value.numerator) / den if den else None
+    if isinstance(value, (tuple, list)) and len(value) >= 2:
+        den = float(value[1])
+        return float(value[0]) / den if den else None
+    return float(value)
+
+def _dms_to_decimal(value):
+    """Convert EXIF DMS (degrees/minutes/seconds) to decimal degrees."""
+    if value is None:
+        return None
+    values = value.values if hasattr(value, 'values') else value
+    if len(values) < 3:
+        return None
+    d = _ratio_to_float(values[0])
+    m = _ratio_to_float(values[1])
+    sec = _ratio_to_float(values[2])
+    if d is None or m is None or sec is None:
+        return None
+    return abs(d) + abs(m) / 60.0 + abs(sec) / 3600.0
+
+def _ref_value(value, default):
+    if value is None:
+        return default
+    raw = getattr(value, 'values', value)
+    if isinstance(raw, (list, tuple)) and raw:
+        raw = raw[0]
+    return str(raw).strip().upper().replace("'", '').replace('"', '')
+
+def _validate_coordinates(lat, lon):
+    if lat is None or lon is None:
+        return None, None
+    lat, lon = float(lat), float(lon)
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None, None
+    if abs(lat) < 0.000001 and abs(lon) < 0.000001:
+        return None, None
+    return round(lat, 6), round(lon, 6)
+
+def _extract_with_exifread(file_bytes):
+    tags = exifread.process_file(BytesIO(file_bytes), details=False)
+    lat_tag = tags.get('GPS GPSLatitude')
+    lon_tag = tags.get('GPS GPSLongitude')
+    if not lat_tag or not lon_tag:
         return None, None
 
-# ---------------------------------------------------
-# 🌍 GEOSPATIAL EXIF EXTRACTION ENGINE (USING EXIFREAD)
-# ---------------------------------------------------
+    lat = _dms_to_decimal(lat_tag)
+    lon = _dms_to_decimal(lon_tag)
+    if _ref_value(tags.get('GPS GPSLatitudeRef'), 'N').startswith('S'):
+        lat = -lat if lat is not None else None
+    if _ref_value(tags.get('GPS GPSLongitudeRef'), 'E').startswith('W'):
+        lon = -lon if lon is not None else None
+    return _validate_coordinates(lat, lon)
+
+def _extract_with_pillow(file_bytes):
+    """Fallback for Samsung HEIC/HEIF and JPEG EXIF layouts."""
+    with Image.open(BytesIO(file_bytes)) as img:
+        exif = img.getexif()
+        gps = exif.get(34853)  # GPSInfo IFD
+        if not gps:
+            return None, None
+
+        # Pillow may expose GPSInfo keys as integers (GPSInfo spec).
+        lat_raw = gps.get(2)
+        lat_ref = gps.get(1)
+        lon_raw = gps.get(4)
+        lon_ref = gps.get(3)
+
+        lat = _dms_to_decimal(lat_raw)
+        lon = _dms_to_decimal(lon_raw)
+        if _ref_value(lat_ref, 'N').startswith('S'):
+            lat = -lat if lat is not None else None
+        if _ref_value(lon_ref, 'E').startswith('W'):
+            lon = -lon if lon is not None else None
+        return _validate_coordinates(lat, lon)
+
 def extract_gps_info(file_bytes):
+    """Read GPS from original upload bytes without altering the image."""
+    print("🔍 [GPS SYSTEM] Scanning uploaded image for EXIF/GPS location data...")
+
     try:
-        # Exifread original binary data ko directly parse karta hai (100% accuracy)
-        tags = exifread.process_file(BytesIO(file_bytes), details=False)
-        
-        lat = tags.get('GPS GPSLatitude')
-        lat_ref = tags.get('GPS GPSLatitudeRef')
-        lon = tags.get('GPS GPSLongitude')
-        lon_ref = tags.get('GPS GPSLongitudeRef')
-
-        if lat and lon and lat_ref and lon_ref:
-            def to_decimal(value):
-                # Handle ratio objects automatically
-                d, m, s = value.values
-                dec = float(d.num)/float(d.den) + (float(m.num)/float(m.den))/60.0 + (float(s.num)/float(s.den))/3600.0
-                return dec
-
-            lat_val = to_decimal(lat)
-            if str(lat_ref.values[0]) == 'S': 
-                lat_val = -lat_val
-
-            lon_val = to_decimal(lon)
-            if str(lon_ref.values[0]) == 'W': 
-                lon_val = -lon_val
-
-            return round(lat_val, 6), round(lon_val, 6)
-            
+        lat, lon = _extract_with_exifread(file_bytes)
+        if lat is not None and lon is not None:
+            print(f"✅ [GPS SYSTEM] EXIFREAD SUCCESS: Lat {lat}, Lon {lon}")
+            return lat, lon
+        print("ℹ️ [GPS SYSTEM] ExifRead found no usable GPS coordinates; trying Pillow fallback...")
     except Exception as e:
-        print(f"EXIFREAD Parsing Error: {e}")
-        
+        print(f"⚠️ [GPS SYSTEM] ExifRead parsing failed: {e}")
+
+    try:
+        lat, lon = _extract_with_pillow(file_bytes)
+        if lat is not None and lon is not None:
+            print(f"✅ [GPS SYSTEM] PILLOW SUCCESS: Lat {lat}, Lon {lon}")
+            return lat, lon
+        print("❌ [GPS SYSTEM] Pillow also found no GPS coordinates.")
+    except Exception as e:
+        print(f"⚠️ [GPS SYSTEM] Pillow EXIF parsing failed: {e}")
+
+    print(f"❌ [GPS SYSTEM] NO USABLE GPS COORDINATES FOUND. HEIF support: {HEIF_SUPPORT}")
     return None, None
 
 RECOVERY_OTP_CACHE = {} 
@@ -2938,14 +2983,24 @@ def collab_upload(token):
 @app.route('/map')
 @login_required
 def map_view():
-    # Only the current user's non-trash assets are exposed to the map.
-    # Both coordinates must exist so frontend never receives a broken point.
-    geo_images = list(images_collection.find({
+    # Fetch the user's non-trash assets first, then validate coordinates in Python.
+    # This also accepts older MongoDB documents where coordinates may have been stored as strings.
+    all_user_images = list(images_collection.find({
         "uploader": current_user.username,
-        "in_trash": False,
-        "latitude": {"$type": "number"},
-        "longitude": {"$type": "number"}
+        "in_trash": False
     }).sort("uploaded_at", -1))
+
+    geo_images = []
+    for image in all_user_images:
+        try:
+            lat = float(image.get("latitude"))
+            lon = float(image.get("longitude"))
+            if -90 <= lat <= 90 and -180 <= lon <= 180 and not (abs(lat) < 0.000001 and abs(lon) < 0.000001):
+                image["latitude"] = round(lat, 6)
+                image["longitude"] = round(lon, 6)
+                geo_images.append(image)
+        except (TypeError, ValueError):
+            continue
 
     return render_template(
         'map.html',
